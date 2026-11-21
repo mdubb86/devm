@@ -1,0 +1,58 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  go:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: just
+      - run: go mod download
+      # Prep every //go:embed blob via `just embeds` — single source
+      # of truth for embed builds. When adding a new embed, update the
+      # `embeds` recipe in justfile and this step needs no change.
+      # Previous CI duplicated each embed-build shell inline; drift
+      # across justfile/CI shipped bugs (v0.9.8 tag rebuild failed
+      # because devm-setsid-shim was in justfile but not CI).
+      - run: just embeds
+      - run: go vet ./...
+      # Diagnostic hardening after repeated SIGTERM (exit 143) kills at
+      # ~3 min of silence during the orchestrator + serviceapi parallel
+      # grind. -v names the test currently running, -timeout 10m makes
+      # Go dump all goroutine stacks if any single test hangs, -p 1
+      # serializes packages so the two heavies don't share a runner
+      # at the same time (ubuntu-latest = 2 CPUs, 7GB RAM; -race
+      # doubles memory, two heavies concurrent is likely what triggered
+      # the kills). timeout-minutes caps the step so an infinite hang
+      # fails cleanly rather than running the job timeout out.
+      - run: go test -race -v -p 1 -timeout 10m ./...
+        timeout-minutes: 45
+      - run: go build ./...
+
+  shellcheck:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: sudo apt-get install -y shellcheck
+      - run: shellcheck scripts/release.sh scripts/release_test.sh scripts/install.sh scripts/install_test.sh
+      # publish.sh and its test exist only in the private devm-dev repo.
+      - if: github.repository == 'mdubb86/devm-dev'
+        run: shellcheck scripts/publish.sh scripts/publish_test.sh
+      - if: github.repository == 'mdubb86/devm-dev'
+        run: bash scripts/publish_test.sh
+
+  install-smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run install.sh smoke
+        run: bash scripts/install_test.sh

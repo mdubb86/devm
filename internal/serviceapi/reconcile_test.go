@@ -1,0 +1,1297 @@
+package serviceapi
+
+import (
+	"bufio"
+	"bytes"
+	"context"
+	"encoding/json"
+	"fmt"
+	"net"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"github.com/mdubb86/devm/internal/approve"
+	"github.com/mdubb86/devm/internal/identity"
+	"github.com/mdubb86/devm/internal/reconcile"
+	"github.com/mdubb86/devm/internal/sandbox/tart"
+	"github.com/mdubb86/devm/internal/schema"
+	"github.com/mdubb86/devm/internal/supervisor"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+)
+
+// setupProjectDirWithDevm creates a temporary directory with devm.yaml
+// and optional devm.me.yaml, and approves the snapshot. Used by tests
+// that use WorkspaceHostPath in the reconcile request — the approve
+// gate reads devm.yaml from WorkspaceHostPath (the project's Mac cwd).
+func setupProjectDirWithDevm(t *testing.T, projectID string, devmContent string, meContent string) (string, *approve.Store) {
+	t.Helper()
+	projDir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(projDir, "devm.yaml"), []byte(devmContent), 0644))
+	var meBytes []byte
+	if meContent != "" {
+		meBytes = []byte(meContent)
+		require.NoError(t, os.WriteFile(filepath.Join(projDir, "devm.me.yaml"), meBytes, 0644))
+	}
+
+	// Approve the snapshot so the gate check passes.
+	// Pass nil (not empty bytes) for meYAML when there's no devm.me.yaml.
+	store := approve.NewStore(identity.Prod)
+	require.NoError(t, store.Write(projectID, []byte(devmContent), meBytes, nil, nil, "user"))
+	return projDir, store
+}
+
+// setupProjectDirForCfg creates a project dir with a devm.yaml that matches
+// the given cfg, and approves it. This is a convenience for tests that need
+// to provide WorkspaceHostPath but don't care about testing approval divergence.
+func setupProjectDirForCfg(t *testing.T, projectID string, cfg schema.Config) string {
+	t.Helper()
+	// Create minimal YAML with just the project name.
+	// For most tests that aren't testing approval, this is sufficient.
+	devmYAML := fmt.Sprintf("project:\n  name: %s\n", cfg.Project.Name)
+	projDir, _ := setupProjectDirWithDevm(t, projectID, devmYAML, "")
+	return projDir
+}
+
+// registerFakeSoftnet spins up a fake softnet control-socket listener
+// for projectID and registers it in softnetState, so a /vm/reconcile
+// live-apply's pushExposeMap call — which now loud-fails when
+// softnetState is empty instead of silently no-opping (see expose.go)
+// — has a real socket to dial. The listener accepts and discards every
+// line; these tests exercise the reconcile handler's control flow, not
+// the expose-map wire shape (that's softnet_control_test.go's job).
+// Registration is cleaned up via t.Cleanup so it doesn't leak into
+// other tests sharing the same project id against the package-global
+// softnetState map.
+func registerFakeSoftnet(t *testing.T, projectID string) {
+	t.Helper()
+	// AF_UNIX sun_path is capped at 104 bytes on Darwin. t.TempDir()
+	// nests under $TMPDIR *and* the full test name, which overflows
+	// that limit for several of this file's longer test names (see
+	// softnet_paths.go's softnetSockDir doc for the same constraint on
+	// the production code path). Root directly under /tmp with a short
+	// name instead, mirroring softnetSockDir's approach.
+	dir, err := os.MkdirTemp("/tmp", "devm-sn-")
+	require.NoError(t, err)
+	t.Cleanup(func() { os.RemoveAll(dir) })
+	sock := filepath.Join(dir, "c.sock")
+	ln, err := net.Listen("unix", sock)
+	require.NoError(t, err)
+	t.Cleanup(func() { ln.Close() })
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			go func(c net.Conn) {
+				defer c.Close()
+				line, err := bufio.NewReader(c).ReadString('\n')
+				if err != nil {
+					return
+				}
+				// setExposeMap is acked; other ops are fire-and-forget.
+				if strings.Contains(line, `"op":"setExposeMap"`) {
+					_, _ = c.Write([]byte(`{"ok":true,"results":[]}` + "\n"))
+				}
+			}(c)
+		}
+	}()
+	softnetState.put(projectID, sock)
+	t.Cleanup(func() { softnetState.del(projectID) })
+}
+
+// registerFakeSoftnetAtDeterministicPath is registerFakeSoftnet for
+// tests that drive the real /vm/start handler: the handler overwrites
+// softnetState with SoftnetControlSock's deterministic path before
+// spawning, so the fake must listen exactly there for the (now fatal)
+// expose push to be acked. The path hashes the test's HOME-derived
+// runtime dir, so it can't collide with a live daemon's sockets.
+func registerFakeSoftnetAtDeterministicPath(t *testing.T, projectID string) {
+	t.Helper()
+	sock := SoftnetControlSock(identity.Prod, projectID)
+	require.NoError(t, os.MkdirAll(filepath.Dir(sock), 0o700))
+	_ = os.Remove(sock)
+	ln, err := net.Listen("unix", sock)
+	require.NoError(t, err)
+	t.Cleanup(func() { ln.Close(); os.Remove(sock) })
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			go func(c net.Conn) {
+				defer c.Close()
+				line, err := bufio.NewReader(c).ReadString('\n')
+				if err != nil {
+					return
+				}
+				if strings.Contains(line, `"op":"setExposeMap"`) {
+					_, _ = c.Write([]byte(`{"ok":true,"results":[]}` + "\n"))
+				}
+			}(c)
+		}
+	}()
+}
+
+// createTestCA creates a dummy CA file in the test's HOME/.../ca/ directory.
+func createTestCA(t *testing.T) {
+	t.Helper()
+	home, err := os.UserHomeDir()
+	require.NoError(t, err)
+	caDir := filepath.Join(home, "Library", "Application Support", "devm", "ca")
+	require.NoError(t, os.MkdirAll(caDir, 0o755))
+	caCert := filepath.Join(caDir, "root.crt")
+	require.NoError(t, os.WriteFile(caCert, []byte("-----BEGIN CERTIFICATE-----\nDUMMY\n-----END CERTIFICATE-----\n"), 0o644))
+}
+
+func TestVMReconcile_NoSnapshotYet_TreatsAllAsFullDiff(t *testing.T) {
+	// Regression: without a baseline snapshot, ComputeAllChanges was
+	// diffing against schema.Config{} — every teardown-bucket kind
+	// spuriously surfaced as pending after a fresh cold-start. Fix
+	// seeds the snapshot at cold-start; this test locks that the
+	// reconcile handler now has a baseline available whenever the VM
+	// has ever been started.
+	t.Setenv("HOME", t.TempDir())
+	cfg := schema.Config{
+		Project:  schema.Project{Name: "p"},
+		Packages: []string{"jq"},
+	}
+	// Simulate what cold-start does: write snapshot.
+	require.NoError(t, WriteStateSnapshot(identity.Prod, "p", StateSnapshot{Cfg: cfg}))
+
+	// Setup project dir with devm.yaml matching cfg.
+	projDir, _ := setupProjectDirWithDevm(t, "p", "project:\n  name: p\npackages:\n  - jq\n", "")
+
+	// Reconcile against unchanged cfg → nothing to do.
+	req := VMReconcileRequest{Name: "p", Cfg: cfg, WorkspaceHostPath: projDir}
+	body, _ := json.Marshal(req)
+
+	server := NewServer(identity.Prod.SocketPath(), Build{})
+	locks := NewProjectLocks()
+	RegisterReconcileHandler(server, identity.Prod, NewStateCache(), locks, &fakeApply{}, &fakePackages{}, &fakeTartList{running: true, vmName: "p"}, supervisor.New(t.TempDir()), nil, 0)
+
+	rec := httptest.NewRecorder()
+	server.mux.ServeHTTP(rec, httptest.NewRequest("POST", "/vm/reconcile", bytes.NewReader(body)))
+	require.Equal(t, http.StatusOK, rec.Code, "body=%s", rec.Body.String())
+
+	var resp VMReconcileResponse
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
+	assert.Empty(t, resp.Applied)
+	assert.Empty(t, resp.TeardownRequired,
+		"unchanged cfg against seeded snapshot must produce zero pending changes")
+}
+
+func TestVMReconcile_LiveChangeAppliesAndSnapshots(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	createTestCA(t)
+
+	// Seed baseline snapshot: old_cfg has FOO=old.
+	oldCfg := schema.Config{
+		Project: schema.Project{Name: "p"},
+		Env:     map[string]schema.EnvValue{"FOO": {Literal: "old"}},
+	}
+	require.NoError(t, WriteStateSnapshot(identity.Prod, "p", StateSnapshot{Cfg: oldCfg}))
+
+	// New cfg: FOO=new (bucket=live).
+	newCfg := oldCfg
+	newCfg.Env = map[string]schema.EnvValue{"FOO": {Literal: "new"}}
+
+	// Fake reconcile deps that record what would run without shelling out.
+	// Concrete wiring provided by an interface in the handler; see impl.
+
+	registerFakeSoftnet(t, "p")
+
+	// Setup project dir with devm.yaml matching the approved snapshot (oldCfg).
+	// The reconcile request will carry newCfg to test the change application.
+	projDir, _ := setupProjectDirWithDevm(t, "p", "project:\n  name: p\nenv:\n  FOO: old\n", "")
+
+	req := VMReconcileRequest{
+		Name: "p", Cfg: newCfg,
+		WorkspaceHostPath: projDir,
+	}
+	body, _ := json.Marshal(req)
+
+	server := NewServer(identity.Prod.SocketPath(), Build{})
+	locks := NewProjectLocks()
+	RegisterReconcileHandler(server, identity.Prod, NewStateCache(), locks /* fake apply */, &fakeApply{}, &fakePackages{}, &fakeTartList{running: true, vmName: "p"}, supervisor.New(t.TempDir()), nil, 0)
+
+	rec := httptest.NewRecorder()
+	server.mux.ServeHTTP(rec, httptest.NewRequest("POST", "/vm/reconcile", bytes.NewReader(body)))
+
+	require.Equal(t, http.StatusOK, rec.Code, "body=%s", rec.Body.String())
+	var resp VMReconcileResponse
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
+	assert.NotEmpty(t, resp.Applied, "FOO change should apply")
+	assert.Empty(t, resp.TeardownRequired)
+
+	// Snapshot persisted.
+	got, err := ReadStateSnapshot(identity.Prod, "p")
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	assert.Equal(t, "new", got.Cfg.Env["FOO"].Literal)
+}
+
+func TestVMReconcile_TeardownRequiredDoesNotPersist(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	oldCfg := schema.Config{
+		Project: schema.Project{Name: "p"},
+	}
+	require.NoError(t, WriteStateSnapshot(identity.Prod, "p", StateSnapshot{Cfg: oldCfg}))
+	newCfg := oldCfg
+	newCfg.Docker = &schema.DockerConfig{Enabled: true} // bucket=recreate
+
+	projDir := setupProjectDirForCfg(t, "p", oldCfg)
+	req := VMReconcileRequest{Name: "p", Cfg: newCfg, WorkspaceHostPath: projDir}
+	body, _ := json.Marshal(req)
+
+	server := NewServer(identity.Prod.SocketPath(), Build{})
+	locks := NewProjectLocks()
+	RegisterReconcileHandler(server, identity.Prod, NewStateCache(), locks, &fakeApply{}, &fakePackages{}, &fakeTartList{running: true, vmName: "p"}, supervisor.New(t.TempDir()), nil, 0)
+
+	rec := httptest.NewRecorder()
+	server.mux.ServeHTTP(rec, httptest.NewRequest("POST", "/vm/reconcile", bytes.NewReader(body)))
+
+	require.Equal(t, http.StatusOK, rec.Code)
+	var resp VMReconcileResponse
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
+	assert.NotEmpty(t, resp.TeardownRequired)
+
+	// Snapshot NOT overwritten with new_cfg (docker change is pending).
+	got, err := ReadStateSnapshot(identity.Prod, "p")
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	assert.False(t, got.Cfg.DockerEnabled(), "docker change must not be persisted until user acts")
+}
+
+func TestVMReconcile_PerServiceEnvChange_PersistsInSnapshot(t *testing.T) {
+	// Per-service env change (as opposed to top-level cfg.Env) must
+	// land in the snapshot's Services[svc].Env, not just cfg.Env.
+	// Otherwise the same change re-surfaces on every subsequent
+	// reconcile.
+	t.Setenv("HOME", t.TempDir())
+	createTestCA(t)
+	oldCfg := schema.Config{
+		Project: schema.Project{Name: "p"},
+		Services: schema.OrderedMapOf(map[string]schema.Service{
+			"web": {
+				ExecArgv: []string{"/bin/true"},
+				Env:      map[string]schema.EnvValue{"OLD": {Literal: "a"}},
+			},
+		}),
+	}
+	require.NoError(t, WriteStateSnapshot(identity.Prod, "p", StateSnapshot{Cfg: oldCfg}))
+
+	newCfg := oldCfg
+	newSvc := oldCfg.Services.Entries["web"]
+	newSvc.Env = map[string]schema.EnvValue{"OLD": {Literal: "b"}}
+	newCfg.Services = schema.OrderedMapOf(map[string]schema.Service{"web": newSvc})
+
+	registerFakeSoftnet(t, "p")
+
+	// Setup project dir with devm.yaml matching oldCfg (approved state).
+	projDir, _ := setupProjectDirWithDevm(t, "p", "project:\n  name: p\nservices:\n  web:\n    exec:\n      - /bin/true\n    env:\n      OLD: a\n", "")
+
+	req := VMReconcileRequest{Name: "p", Cfg: newCfg, WorkspaceHostPath: projDir}
+	body, _ := json.Marshal(req)
+
+	server := NewServer(identity.Prod.SocketPath(), Build{})
+	locks := NewProjectLocks()
+	RegisterReconcileHandler(server, identity.Prod, NewStateCache(), locks, &fakeApply{}, &fakePackages{}, &fakeTartList{running: true, vmName: "p"}, supervisor.New(t.TempDir()), nil, 0)
+
+	rec := httptest.NewRecorder()
+	server.mux.ServeHTTP(rec, httptest.NewRequest("POST", "/vm/reconcile", bytes.NewReader(body)))
+	require.Equal(t, http.StatusOK, rec.Code, "body=%s", rec.Body.String())
+
+	got, err := ReadStateSnapshot(identity.Prod, "p")
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	assert.Equal(t, "b", got.Cfg.Services.Entries["web"].Env["OLD"].Literal,
+		"snapshot must reflect per-service env change; otherwise it re-surfaces every reconcile")
+}
+
+func TestVMReconcile_MixedLiveServiceAndTopLevelTeardown_PreservesPending(t *testing.T) {
+	// One reconcile carries BOTH a per-service live change (service
+	// exec) AND a top-level teardown-required change (docker toggle).
+	// Applying the live exec must not silently absorb the pending
+	// docker change into the snapshot. Next reconcile must still
+	// surface the docker change as teardown_required.
+	t.Setenv("HOME", t.TempDir())
+	createTestCA(t)
+	oldCfg := schema.Config{
+		Project: schema.Project{Name: "p"},
+		Services: schema.OrderedMapOf(map[string]schema.Service{
+			"web": {
+				ExecArgv: []string{"/bin/true"},
+			},
+		}),
+	}
+	require.NoError(t, WriteStateSnapshot(identity.Prod, "p", StateSnapshot{Cfg: oldCfg}))
+
+	newCfg := oldCfg
+	newSvc := oldCfg.Services.Entries["web"]
+	newSvc.ExecArgv = []string{"/bin/echo", "hi"} // live change
+	newCfg.Services = schema.OrderedMapOf(map[string]schema.Service{"web": newSvc})
+	newCfg.Docker = &schema.DockerConfig{Enabled: true} // teardown-required addition
+
+	registerFakeSoftnet(t, "p")
+
+	// Setup project dir with devm.yaml matching oldCfg (approved state).
+	projDir, _ := setupProjectDirWithDevm(t, "p", "project:\n  name: p\nservices:\n  web:\n    exec:\n      - /bin/true\n", "")
+
+	req := VMReconcileRequest{Name: "p", Cfg: newCfg, WorkspaceHostPath: projDir}
+	body, _ := json.Marshal(req)
+
+	server := NewServer(identity.Prod.SocketPath(), Build{})
+	locks := NewProjectLocks()
+	RegisterReconcileHandler(server, identity.Prod, NewStateCache(), locks, &fakeApply{}, &fakePackages{}, &fakeTartList{running: true, vmName: "p"}, supervisor.New(t.TempDir()), nil, 0)
+
+	rec := httptest.NewRecorder()
+	server.mux.ServeHTTP(rec, httptest.NewRequest("POST", "/vm/reconcile", bytes.NewReader(body)))
+	require.Equal(t, http.StatusOK, rec.Code, "body=%s", rec.Body.String())
+
+	got, err := ReadStateSnapshot(identity.Prod, "p")
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	// Live change (exec) landed in snapshot.
+	assert.Equal(t, []string{"/bin/echo", "hi"}, got.Cfg.Services.Entries["web"].ExecArgv)
+	// Pending docker change did NOT land — old value preserved so next
+	// reconcile still surfaces the docker toggle as teardown_required.
+	assert.False(t, got.Cfg.DockerEnabled())
+}
+
+func TestMergeLiveApplied_Direct(t *testing.T) {
+	// Regression: mergeLiveApplied's switch had no case for
+	// KindServiceDirectChange, so a live direct-add reconcile left the
+	// snapshot recording direct:false. A subsequent withdraw then diffed
+	// stale-false vs false, saw no change, and ApplyLive never rebuilt
+	// svc_ingress — the accept rule (and open port) persisted forever.
+	old := schema.Config{
+		Project: schema.Project{Name: "p"},
+		Services: schema.OrderedMapOf(map[string]schema.Service{
+			"web": {Hostname: "web.test", Direct: false},
+		}),
+	}
+	newCfg := schema.Config{
+		Project: schema.Project{Name: "p"},
+		Services: schema.OrderedMapOf(map[string]schema.Service{
+			"web": {Hostname: "web.test", Direct: true},
+		}),
+	}
+	applied := []reconcile.Change{{Kind: reconcile.KindServiceDirectChange, Service: "web"}}
+
+	merged := mergeLiveApplied(old, newCfg, applied)
+
+	require.NotNil(t, merged.Services.Entries,
+		"service entries must be populated on live apply, or a subsequent withdraw diffs against an empty map")
+	assert.True(t, merged.Services.Entries["web"].Direct,
+		"direct flip must land in the merged snapshot, or a subsequent withdraw diffs stale-false vs false and never rebuilds svc_ingress")
+}
+
+func TestMergeLiveApplied_Packages(t *testing.T) {
+	// Package add/remove is BucketLive; mergeLiveApplied must
+	// wholesale-replace Packages from new_cfg so the applied set lands
+	// in the snapshot (all package changes are applied together in one
+	// reconcile, so per-key merging isn't needed).
+	old := schema.Config{
+		Project:  schema.Project{Name: "p"},
+		Packages: []string{"jq"},
+	}
+	newCfg := schema.Config{
+		Project:  schema.Project{Name: "p"},
+		Packages: []string{"jq", "yq"},
+	}
+	applied := []reconcile.Change{{Kind: reconcile.KindPackageAdd, Key: "yq", New: "yq"}}
+
+	merged := mergeLiveApplied(old, newCfg, applied)
+
+	assert.Equal(t, []string{"jq", "yq"}, merged.Packages)
+}
+
+func TestMergeLiveApplied_Direct_ServiceRemoved(t *testing.T) {
+	// When the service carrying the direct flip is removed entirely in
+	// new_cfg, mergeLiveApplied must drop it from the merged snapshot
+	// (same as every other per-service case), not leave a stale entry.
+	old := schema.Config{
+		Project: schema.Project{Name: "p"},
+		Services: schema.OrderedMapOf(map[string]schema.Service{
+			"web": {Hostname: "web.test", Direct: true},
+		}),
+	}
+	newCfg := schema.Config{
+		Project:  schema.Project{Name: "p"},
+		Services: schema.OrderedMapOf(map[string]schema.Service{}),
+	}
+	applied := []reconcile.Change{{Kind: reconcile.KindServiceDirectChange, Service: "web"}}
+
+	merged := mergeLiveApplied(old, newCfg, applied)
+
+	_, present := merged.Services.Entries["web"]
+	assert.False(t, present, "service removed in new_cfg must be dropped from the merged snapshot")
+}
+
+func TestMergeLiveApplied_Repo(t *testing.T) {
+	// Regression: mergeLiveApplied had no case for KindRepoChange, so a
+	// live-applied repo mutation (label rename, primary toggle, ...)
+	// left the snapshot holding old_cfg's Repos. The same "+ repo"
+	// / "~ repo" diff line then re-surfaced on every subsequent
+	// reconcile even though ApplyLive had already applied it.
+	old := schema.Config{
+		Project: schema.Project{Name: "p"},
+		Repos: map[string]schema.RepoConfig{
+			"main": {Label: strPtr("old-label")},
+		},
+	}
+	newCfg := schema.Config{
+		Project: schema.Project{Name: "p"},
+		Repos: map[string]schema.RepoConfig{
+			"main": {Label: strPtr("new-label")},
+		},
+	}
+	applied := []reconcile.Change{{
+		Kind: reconcile.KindRepoChange, Op: reconcile.OpMutate, Field: "Label",
+		RepoBefore: &schema.RepoConfig{Label: strPtr("old-label")},
+		RepoAfter:  &schema.RepoConfig{Label: strPtr("new-label")},
+	}}
+
+	merged := mergeLiveApplied(old, newCfg, applied)
+
+	require.Contains(t, merged.Repos, "main")
+	assert.Equal(t, "new-label", *merged.Repos["main"].Label)
+}
+
+func TestMergeLiveApplied_Volume(t *testing.T) {
+	// Same regression as TestMergeLiveApplied_Repo, for volumes.
+	old := schema.Config{
+		Project: schema.Project{Name: "p"},
+		Volumes: map[string]schema.Volume{
+			"data": {Path: "/var/lib/data"},
+		},
+	}
+	newCfg := schema.Config{
+		Project: schema.Project{Name: "p"},
+		Volumes: map[string]schema.Volume{
+			"data": {Path: "/var/lib/data2"},
+		},
+	}
+	applied := []reconcile.Change{{
+		Kind: reconcile.KindVolumeChange, Op: reconcile.OpMutate, Field: "path",
+		VolumeBefore: &schema.Volume{Path: "/var/lib/data"},
+		VolumeAfter:  &schema.Volume{Path: "/var/lib/data2"},
+	}}
+
+	merged := mergeLiveApplied(old, newCfg, applied)
+
+	require.Contains(t, merged.Volumes, "data")
+	assert.Equal(t, "/var/lib/data2", merged.Volumes["data"].Path)
+}
+
+func TestMergeLiveApplied_Commands(t *testing.T) {
+	// Same regression as TestMergeLiveApplied_Repo: KindCommandsChange
+	// lives inside Config.Repos too, so it must also wholesale-replace
+	// Repos on merge.
+	old := schema.Config{
+		Project: schema.Project{Name: "p"},
+		Repos: map[string]schema.RepoConfig{
+			"main": {Commands: []string{"install"}},
+		},
+	}
+	newCfg := schema.Config{
+		Project: schema.Project{Name: "p"},
+		Repos: map[string]schema.RepoConfig{
+			"main": {Commands: []string{"install", "lint"}},
+		},
+	}
+	applied := []reconcile.Change{{
+		Kind: reconcile.KindCommandsChange, Op: reconcile.OpAdd, Repo: "main", Key: "lint",
+		New: "lint",
+	}}
+
+	merged := mergeLiveApplied(old, newCfg, applied)
+
+	require.Contains(t, merged.Repos, "main")
+	assert.Equal(t, []string{"install", "lint"}, merged.Repos["main"].Commands)
+}
+
+func TestVMReconcile_SecretDriftEmitsKindSecretChange(t *testing.T) {
+	// CLI resolves + hashes secret refs (login-keychain access happens
+	// in the user context) and sends the map on every /vm/reconcile
+	// call. Compared against the last-applied snapshot's SecretHashes,
+	// the diff engine must surface a KindSecretChange when the hash for
+	// an existing secret ref rotates.
+	t.Setenv("HOME", t.TempDir())
+
+	cfg := schema.Config{Project: schema.Project{Name: "p"}}
+	require.NoError(t, WriteStateSnapshot(identity.Prod, "p", StateSnapshot{
+		Cfg:          cfg,
+		SecretHashes: map[string]string{"TOK": "old-hash"},
+	}))
+
+	projDir := setupProjectDirForCfg(t, "p", cfg)
+	req := VMReconcileRequest{
+		Name:              "p",
+		Cfg:               cfg,
+		WorkspaceHostPath: projDir,
+		SecretHashes:      map[string]string{"TOK": "new-hash"},
+	}
+	body, _ := json.Marshal(req)
+
+	server := NewServer(identity.Prod.SocketPath(), Build{})
+	locks := NewProjectLocks()
+	RegisterReconcileHandler(server, identity.Prod, NewStateCache(), locks, &fakeApply{}, &fakePackages{}, &fakeTartList{running: true, vmName: "p"}, supervisor.New(t.TempDir()), nil, 0)
+
+	rec := httptest.NewRecorder()
+	server.mux.ServeHTTP(rec, httptest.NewRequest("POST", "/vm/reconcile", bytes.NewReader(body)))
+	require.Equal(t, http.StatusOK, rec.Code, "body=%s", rec.Body.String())
+
+	var resp VMReconcileResponse
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
+	kinds := changeKinds(resp.AppliedIronProxy)
+	assert.Contains(t, kinds, reconcile.KindSecretChange,
+		"rotated secret hash must surface as a KindSecretChange in AppliedIronProxy")
+	assert.Empty(t, resp.Applied)
+	assert.Empty(t, resp.TeardownRequired)
+}
+
+func TestVMReconcile_LiveChangeOnly_PreservesSecretHashes(t *testing.T) {
+	// Regression for F1: the live-apply success path wrote a fresh
+	// StateSnapshot{Cfg, TemplateContents} without carrying forward
+	// SecretHashes from the prior snapshot. That clobbered the baseline
+	// to nil, so the very next reconcile treated every existing secret
+	// as newly added (KindSecretAdd) — an iron-proxy respawn storm with
+	// no actual secret drift. A live-only reconcile (no network, no
+	// secret rotation) must leave SecretHashes untouched on disk.
+	t.Setenv("HOME", t.TempDir())
+	createTestCA(t)
+
+	oldCfg := schema.Config{
+		Project: schema.Project{Name: "p"},
+		Env:     map[string]schema.EnvValue{"FOO": {Literal: "old"}},
+	}
+	require.NoError(t, WriteStateSnapshot(identity.Prod, "p", StateSnapshot{
+		Cfg:          oldCfg,
+		SecretHashes: map[string]string{"A": "h1"},
+	}))
+
+	// New cfg: FOO=new (bucket=live). Same secret hash — no drift.
+	newCfg := oldCfg
+	newCfg.Env = map[string]schema.EnvValue{"FOO": {Literal: "new"}}
+
+	registerFakeSoftnet(t, "p")
+
+	// Setup project dir with devm.yaml matching oldCfg (approved state).
+	projDir, _ := setupProjectDirWithDevm(t, "p", "project:\n  name: p\nenv:\n  FOO: old\n", "")
+
+	req := VMReconcileRequest{
+		Name: "p", Cfg: newCfg,
+		WorkspaceHostPath: projDir,
+		SecretHashes:      map[string]string{"A": "h1"},
+	}
+	body, _ := json.Marshal(req)
+
+	server := NewServer(identity.Prod.SocketPath(), Build{})
+	locks := NewProjectLocks()
+	RegisterReconcileHandler(server, identity.Prod, NewStateCache(), locks, &fakeApply{}, &fakePackages{}, &fakeTartList{running: true, vmName: "p"}, healthyIronProxySupervisor(t, "p"), nil, 0)
+
+	rec := httptest.NewRecorder()
+	server.mux.ServeHTTP(rec, httptest.NewRequest("POST", "/vm/reconcile", bytes.NewReader(body)))
+	require.Equal(t, http.StatusOK, rec.Code, "body=%s", rec.Body.String())
+
+	var resp VMReconcileResponse
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
+	assert.NotEmpty(t, resp.Applied, "FOO change should apply")
+	assert.Empty(t, resp.AppliedIronProxy, "no secret drift or network change; nothing for iron-proxy")
+	assert.Empty(t, resp.TeardownRequired)
+
+	snap, err := ReadStateSnapshot(identity.Prod, "p")
+	require.NoError(t, err)
+	require.NotNil(t, snap)
+	assert.Equal(t, map[string]string{"A": "h1"}, snap.SecretHashes,
+		"live-only reconcile must not clobber SecretHashes to nil")
+}
+
+func TestVMReconcile_MissingIronProxy_EmitsKindIronProxyDown(t *testing.T) {
+	// Self-heal: even with a completely unchanged config, a running VM
+	// whose iron-proxy is missing/stale must surface a synthetic
+	// KindIronProxyDown change on AppliedIronProxy so the CLI's existing
+	// dispatch to /vm/apply-iron-proxy respawns it.
+	t.Setenv("HOME", t.TempDir())
+	cfg := schema.Config{Project: schema.Project{Name: "p"}}
+	require.NoError(t, WriteStateSnapshot(identity.Prod, "p", StateSnapshot{Cfg: cfg}))
+
+	projDir := setupProjectDirForCfg(t, "p", cfg)
+	req := VMReconcileRequest{Name: "p", Cfg: cfg, WorkspaceHostPath: projDir}
+	body, _ := json.Marshal(req)
+
+	server := NewServer(identity.Prod.SocketPath(), Build{})
+	locks := NewProjectLocks()
+	// A fresh supervisor with no adopted iron-proxy process reports the
+	// proxy as not Present/Running → ComputeProxyHealth returns MISSING.
+	sup := supervisor.New(t.TempDir())
+	RegisterReconcileHandler(server, identity.Prod, NewStateCache(), locks, &fakeApply{}, &fakePackages{}, &fakeTartList{running: true, vmName: "p"}, sup, nil, 0)
+
+	rec := httptest.NewRecorder()
+	server.mux.ServeHTTP(rec, httptest.NewRequest("POST", "/vm/reconcile", bytes.NewReader(body)))
+	require.Equal(t, http.StatusOK, rec.Code, "body=%s", rec.Body.String())
+
+	var resp VMReconcileResponse
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
+	kinds := changeKinds(resp.AppliedIronProxy)
+	assert.Contains(t, kinds, reconcile.KindIronProxyDown,
+		"missing iron-proxy on a running VM must surface KindIronProxyDown even with an unchanged config")
+}
+
+func TestVMReconcile_StoppedVM_MissingIronProxy_DoesNotEmitKindIronProxyDown(t *testing.T) {
+	// The heal is gated on the VM actually running — a stopped VM's
+	// iron-proxy is expected to be down and must not trigger the heal
+	// path (there's nothing to respawn against).
+	t.Setenv("HOME", t.TempDir())
+	cfg := schema.Config{Project: schema.Project{Name: "p"}}
+	require.NoError(t, WriteStateSnapshot(identity.Prod, "p", StateSnapshot{Cfg: cfg}))
+
+	projDir := setupProjectDirForCfg(t, "p", cfg)
+	req := VMReconcileRequest{Name: "p", Cfg: cfg, WorkspaceHostPath: projDir}
+	body, _ := json.Marshal(req)
+
+	server := NewServer(identity.Prod.SocketPath(), Build{})
+	locks := NewProjectLocks()
+	sup := supervisor.New(t.TempDir())
+	RegisterReconcileHandler(server, identity.Prod, NewStateCache(), locks, &fakeApply{}, &fakePackages{}, &fakeTartList{running: false, vmName: "p"}, sup, nil, 0)
+
+	rec := httptest.NewRecorder()
+	server.mux.ServeHTTP(rec, httptest.NewRequest("POST", "/vm/reconcile", bytes.NewReader(body)))
+	require.Equal(t, http.StatusOK, rec.Code, "body=%s", rec.Body.String())
+
+	var resp VMReconcileResponse
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
+	assert.Empty(t, resp.AppliedIronProxy,
+		"stopped VM must not trigger the iron-proxy heal path")
+}
+
+// healthyIronProxySupervisor returns a *supervisor.Supervisor for which
+// ComputeProxyHealth(sup, projectID) reports ProxyOK: an adopted PID
+// that's actually alive (this test process itself, so Status() reports
+// Running=true without spawning anything) plus a stub on-disk config
+// file (ComputeProxyHealth only checks that it exists). Tests that
+// aren't exercising the Task 4 self-heal path need this so the heal
+// doesn't spuriously add a KindIronProxyDown to AppliedIronProxy.
+func healthyIronProxySupervisor(t *testing.T, projectID string) *supervisor.Supervisor {
+	t.Helper()
+	sup := supervisor.New(t.TempDir())
+	sup.Adopt(supervisor.Key{ProjectID: projectID, Role: supervisor.RoleProxy}, os.Getpid())
+	cfgPath, err := IronProxyConfigPath(identity.Prod, projectID)
+	require.NoError(t, err)
+	require.NoError(t, os.MkdirAll(filepath.Dir(cfgPath), 0o755))
+	require.NoError(t, os.WriteFile(cfgPath, []byte("stub\n"), 0o600))
+	return sup
+}
+
+func changeKinds(cs []reconcile.Change) []reconcile.ChangeKind {
+	out := make([]reconcile.ChangeKind, len(cs))
+	for i, c := range cs {
+		out[i] = c.Kind
+	}
+	return out
+}
+
+// fakeApply is a stand-in for the real ApplyLive; it records that it
+// was called, captures SSH byte fields, and returns success.
+type fakeApply struct {
+	called          bool
+	lastSSHAuthPub  []byte
+	lastSSHHostPriv []byte
+	lastSSHHostPub  []byte
+	// order, when non-nil, gets "apply_live" appended on call — used to
+	// pin call ordering against fakePackages's own "packages" append.
+	order *[]string
+}
+
+func (f *fakeApply) ApplyLive(changes []reconcile.Change, cfg schema.Config, repoRoot, daemonRuntimeDir, vmName string, caPEM, sshAuthPub, sshHostPriv, sshHostPub []byte, identCfg identity.Config, ironProxyURL string) error {
+	f.called = true
+	f.lastSSHAuthPub = sshAuthPub
+	f.lastSSHHostPriv = sshHostPriv
+	f.lastSSHHostPub = sshHostPub
+	if f.order != nil {
+		*f.order = append(*f.order, "apply_live")
+	}
+	return nil
+}
+
+// fakePackages is a stand-in for the real PackagesApplier; it records
+// the args of its most recent call and returns err (nil by default).
+// order, when non-nil, gets "packages" appended on call — used to pin
+// call ordering against fakeApply's own "apply_live" append.
+type fakePackages struct {
+	called    bool
+	projectID string
+	snapCfg   schema.Config
+	adds      []string
+	removes   []string
+	err       error
+	order     *[]string
+}
+
+func (f *fakePackages) ApplyPackages(ctx context.Context, projectID string, snapCfg schema.Config, macCwd string, adds, removes []string) error {
+	f.called = true
+	f.projectID = projectID
+	f.snapCfg = snapCfg
+	f.adds = adds
+	f.removes = removes
+	if f.order != nil {
+		*f.order = append(*f.order, "packages")
+	}
+	return f.err
+}
+
+// fakeTartList is a stand-in for the daemon's *tart.Tart, reporting a
+// fixed running state for one VM name without shelling out to `tart`.
+type fakeTartList struct {
+	running bool
+	vmName  string
+}
+
+func (f *fakeTartList) List(ctx context.Context) ([]tart.VM, error) {
+	return []tart.VM{{Name: f.vmName, Running: f.running}}, nil
+}
+
+func TestVMReconcile_StoppedVM_SkipsApplyAndSnapshot(t *testing.T) {
+	// When VM is stopped, /vm/reconcile must not call ApplyLive and
+	// must not update the snapshot — changes get picked up at next
+	// cold-start's provisioner bundle pipe.
+	t.Setenv("HOME", t.TempDir())
+	oldCfg := schema.Config{
+		Project: schema.Project{Name: "p"},
+		Env:     map[string]schema.EnvValue{"FOO": {Literal: "old"}},
+	}
+	require.NoError(t, WriteStateSnapshot(identity.Prod, "p", StateSnapshot{Cfg: oldCfg}))
+
+	newCfg := oldCfg
+	newCfg.Env = map[string]schema.EnvValue{"FOO": {Literal: "new"}}
+
+	projDir := setupProjectDirForCfg(t, "p", oldCfg)
+	req := VMReconcileRequest{Name: "p", Cfg: newCfg, WorkspaceHostPath: projDir}
+	body, _ := json.Marshal(req)
+
+	server := NewServer(identity.Prod.SocketPath(), Build{})
+	locks := NewProjectLocks()
+	fake := &fakeApply{}
+	// Use a fake tart that reports p-vm as NOT running.
+	fakeTart := &fakeTartList{running: false, vmName: "p"}
+	RegisterReconcileHandler(server, identity.Prod, NewStateCache(), locks, fake, &fakePackages{}, fakeTart, supervisor.New(t.TempDir()), nil, 0)
+
+	rec := httptest.NewRecorder()
+	server.mux.ServeHTTP(rec, httptest.NewRequest("POST", "/vm/reconcile", bytes.NewReader(body)))
+	require.Equal(t, http.StatusOK, rec.Code, "body=%s", rec.Body.String())
+
+	var resp VMReconcileResponse
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
+	assert.Equal(t, "stopped", resp.SandboxState)
+	assert.Empty(t, resp.Applied, "must not apply against stopped VM")
+	assert.False(t, fake.called, "ApplyLive must not be called against stopped VM")
+
+	// Snapshot preserved at old cfg — pending change re-surfaces
+	// next reconcile (or at cold-start).
+	got, err := ReadStateSnapshot(identity.Prod, "p")
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	assert.Equal(t, "old", got.Cfg.Env["FOO"].Literal,
+		"snapshot must NOT be updated when VM is stopped")
+}
+
+func TestVMReconcile_ServiceAddedFromNilServices_NoPanic(t *testing.T) {
+	// Regression: when old_cfg.Services was nil (e.g., cold-start with an
+	// empty yaml) and new_cfg adds a service with a port, mergeLiveApplied
+	// panicked with "assignment to entry in nil map" because its defensive-
+	// copy guard skipped when the pre-image Services map was nil. Fixed by
+	// dropping the nil check; make() on a nil-length seed and range over
+	// nil are both valid.
+	t.Setenv("HOME", t.TempDir())
+	createTestCA(t)
+	oldCfg := schema.Config{
+		Project: schema.Project{Name: "p"},
+		// No Services at all — Services is nil.
+	}
+	require.NoError(t, WriteStateSnapshot(identity.Prod, "p", StateSnapshot{Cfg: oldCfg}))
+
+	newCfg := oldCfg
+	newCfg.Services = schema.OrderedMapOf(map[string]schema.Service{
+		"api": {Port: 8080},
+	})
+
+	registerFakeSoftnet(t, "p")
+
+	projDir := setupProjectDirForCfg(t, "p", oldCfg)
+	req := VMReconcileRequest{Name: "p", Cfg: newCfg, WorkspaceHostPath: projDir}
+	body, _ := json.Marshal(req)
+
+	server := NewServer(identity.Prod.SocketPath(), Build{})
+	locks := NewProjectLocks()
+	RegisterReconcileHandler(server, identity.Prod, NewStateCache(), locks, &fakeApply{}, &fakePackages{}, &fakeTartList{running: true, vmName: "p"}, supervisor.New(t.TempDir()), nil, 0)
+
+	rec := httptest.NewRecorder()
+	server.mux.ServeHTTP(rec, httptest.NewRequest("POST", "/vm/reconcile", bytes.NewReader(body)))
+	require.Equal(t, http.StatusOK, rec.Code, "body=%s", rec.Body.String())
+
+	// Snapshot must reflect the new port in the newly-created Services map.
+	got, err := ReadStateSnapshot(identity.Prod, "p")
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	require.Greater(t, got.Cfg.Services.Len(), 0, "Services should be populated after live apply, not empty")
+	assert.Equal(t, 8080, got.Cfg.Services.Entries["api"].Port)
+}
+
+func TestVMReconcile_ForwardsSSHBytesToApplyLive(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	createTestCA(t)
+
+	// Seed a snapshot so the reconcile handler treats this as a live-apply candidate.
+	oldCfg := schema.Config{
+		Project: schema.Project{Name: "p"},
+		Env:     map[string]schema.EnvValue{"FOO": {Literal: "old"}},
+	}
+	require.NoError(t, WriteStateSnapshot(identity.Prod, "p", StateSnapshot{Cfg: oldCfg}))
+
+	newCfg := oldCfg
+	newCfg.Env = map[string]schema.EnvValue{"FOO": {Literal: "new"}}
+
+	// Setup project dir with devm.yaml matching oldCfg (approved state).
+	projDir, _ := setupProjectDirWithDevm(t, "p", "project:\n  name: p\nenv:\n  FOO: old\n", "")
+
+	req := VMReconcileRequest{
+		Name:                "p",
+		Cfg:                 newCfg,
+		WorkspaceHostPath:   projDir,
+		SSHAuthorizedPubkey: []byte("ssh-ed25519 AAAA_pub_marker\n"),
+		SSHHostPriv:         []byte("-----BEGIN OPENSSH PRIVATE KEY-----\nHOST_MARKER\n"),
+		SSHHostPub:          []byte("ssh-ed25519 AAAA_host_pub_marker\n"),
+	}
+	body, _ := json.Marshal(req)
+
+	registerFakeSoftnet(t, "p")
+
+	server := NewServer(identity.Prod.SocketPath(), Build{})
+	locks := NewProjectLocks()
+	fake := &fakeApply{}
+	RegisterReconcileHandler(server, identity.Prod, NewStateCache(), locks, fake, &fakePackages{}, &fakeTartList{running: true, vmName: "p"}, supervisor.New(t.TempDir()), nil, 0)
+
+	rec := httptest.NewRecorder()
+	server.mux.ServeHTTP(rec, httptest.NewRequest("POST", "/vm/reconcile", bytes.NewReader(body)))
+	require.Equal(t, http.StatusOK, rec.Code, "body=%s", rec.Body.String())
+
+	assert.True(t, fake.called, "ApplyLive must have been invoked for a live env change")
+	assert.Equal(t, req.SSHAuthorizedPubkey, fake.lastSSHAuthPub,
+		"SSH authorized pubkey must forward to ApplyLive")
+	assert.Equal(t, req.SSHHostPriv, fake.lastSSHHostPriv,
+		"SSH host privkey must forward to ApplyLive")
+	assert.Equal(t, req.SSHHostPub, fake.lastSSHHostPub,
+		"SSH host pubkey must forward to ApplyLive")
+}
+
+func TestReconcile_PackageChangesRouteToApplier(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	createTestCA(t)
+
+	oldCfg := schema.Config{
+		Project:  schema.Project{Name: "p"},
+		Packages: []string{"jq"},
+	}
+	require.NoError(t, WriteStateSnapshot(identity.Prod, "p", StateSnapshot{Cfg: oldCfg}))
+
+	newCfg := oldCfg
+	newCfg.Packages = []string{"jq", "sl"}
+
+	registerFakeSoftnet(t, "p")
+
+	projDir := setupProjectDirForCfg(t, "p", oldCfg)
+	req := VMReconcileRequest{Name: "p", Cfg: newCfg, WorkspaceHostPath: projDir}
+	body, _ := json.Marshal(req)
+
+	server := NewServer(identity.Prod.SocketPath(), Build{})
+	locks := NewProjectLocks()
+	pkgs := &fakePackages{}
+	RegisterReconcileHandler(server, identity.Prod, NewStateCache(), locks, &fakeApply{}, pkgs, &fakeTartList{running: true, vmName: "p"}, supervisor.New(t.TempDir()), nil, 0)
+
+	rec := httptest.NewRecorder()
+	server.mux.ServeHTTP(rec, httptest.NewRequest("POST", "/vm/reconcile", bytes.NewReader(body)))
+	require.Equal(t, http.StatusOK, rec.Code, "body=%s", rec.Body.String())
+
+	require.True(t, pkgs.called, "PackagesApplier must be invoked for a package change")
+	assert.Equal(t, "p", pkgs.projectID)
+	assert.Equal(t, []string{"sl"}, pkgs.adds)
+	assert.Empty(t, pkgs.removes)
+	// snapCfg must be the OLD snapshot cfg, not req.Cfg — the applier
+	// rebuilds/restores the iron-proxy config the running proxy
+	// currently reflects.
+	assert.Equal(t, oldCfg.Packages, pkgs.snapCfg.Packages,
+		"applier must receive the OLD snapshot cfg, not the new request cfg")
+
+	var resp VMReconcileResponse
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
+	assert.Contains(t, changeKinds(resp.Applied), reconcile.KindPackageAdd)
+	assert.Empty(t, resp.TeardownRequired)
+
+	got, err := ReadStateSnapshot(identity.Prod, "p")
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	assert.Equal(t, []string{"jq", "sl"}, got.Cfg.Packages)
+}
+
+func TestReconcile_PackagesApplierFailureAbortsAndKeepsSnapshot(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	createTestCA(t)
+
+	oldCfg := schema.Config{
+		Project:  schema.Project{Name: "p"},
+		Packages: []string{"jq"},
+	}
+	require.NoError(t, WriteStateSnapshot(identity.Prod, "p", StateSnapshot{Cfg: oldCfg}))
+
+	newCfg := oldCfg
+	newCfg.Packages = []string{"jq", "sl"}
+
+	registerFakeSoftnet(t, "p")
+
+	projDir := setupProjectDirForCfg(t, "p", oldCfg)
+	req := VMReconcileRequest{Name: "p", Cfg: newCfg, WorkspaceHostPath: projDir}
+	body, _ := json.Marshal(req)
+
+	server := NewServer(identity.Prod.SocketPath(), Build{})
+	locks := NewProjectLocks()
+	pkgs := &fakePackages{err: fmt.Errorf("apt exit 1")}
+	RegisterReconcileHandler(server, identity.Prod, NewStateCache(), locks, &fakeApply{}, pkgs, &fakeTartList{running: true, vmName: "p"}, supervisor.New(t.TempDir()), nil, 0)
+
+	rec := httptest.NewRecorder()
+	server.mux.ServeHTTP(rec, httptest.NewRequest("POST", "/vm/reconcile", bytes.NewReader(body)))
+	require.Equal(t, http.StatusInternalServerError, rec.Code, "body=%s", rec.Body.String())
+
+	got, err := ReadStateSnapshot(identity.Prod, "p")
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	assert.Equal(t, []string{"jq"}, got.Cfg.Packages,
+		"snapshot must be untouched on applier failure so the change re-surfaces next reconcile")
+}
+
+func TestReconcile_PackagesBeforeApplyLive(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	createTestCA(t)
+
+	oldCfg := schema.Config{
+		Project:  schema.Project{Name: "p"},
+		Packages: []string{"jq"},
+		Env:      map[string]schema.EnvValue{"FOO": {Literal: "old"}},
+	}
+	require.NoError(t, WriteStateSnapshot(identity.Prod, "p", StateSnapshot{Cfg: oldCfg}))
+
+	newCfg := oldCfg
+	newCfg.Packages = []string{"jq", "sl"}
+	newCfg.Env = map[string]schema.EnvValue{"FOO": {Literal: "new"}}
+
+	registerFakeSoftnet(t, "p")
+
+	projDir := setupProjectDirForCfg(t, "p", oldCfg)
+	req := VMReconcileRequest{Name: "p", Cfg: newCfg, WorkspaceHostPath: projDir}
+	body, _ := json.Marshal(req)
+
+	server := NewServer(identity.Prod.SocketPath(), Build{})
+	locks := NewProjectLocks()
+	var order []string
+	apply := &fakeApply{order: &order}
+	pkgs := &fakePackages{order: &order}
+	RegisterReconcileHandler(server, identity.Prod, NewStateCache(), locks, apply, pkgs, &fakeTartList{running: true, vmName: "p"}, supervisor.New(t.TempDir()), nil, 0)
+
+	rec := httptest.NewRecorder()
+	server.mux.ServeHTTP(rec, httptest.NewRequest("POST", "/vm/reconcile", bytes.NewReader(body)))
+	require.Equal(t, http.StatusOK, rec.Code, "body=%s", rec.Body.String())
+
+	require.True(t, pkgs.called)
+	require.True(t, apply.called)
+	assert.Equal(t, []string{"packages", "apply_live"}, order,
+		"packages must converge before ApplyLive so a template installer applied in the same reconcile can rely on newly-installed binaries")
+}
+
+func TestReconcile_RefusesWhenDivergedFromApproved(t *testing.T) {
+	// Setup: fake VM state, write devm.yaml, write a DIFFERENT approved snapshot.
+	cfg, _, projDir, store := approveTestSetup(t, "proj-1", "project:\n  name: p\n", "")
+	require.NoError(t, store.Write("proj-1", []byte("project:\n  name: old\n"), nil, nil, nil, "user"))
+	// Build a minimal VMReconcileRequest body.
+	body := VMReconcileRequest{
+		Name:              "proj-1",
+		WorkspaceHostPath: projDir,
+		Cfg:               schema.Config{Project: schema.Project{Name: "p"}},
+	}
+	buf, err := json.Marshal(body)
+	require.NoError(t, err)
+	req := httptest.NewRequest(http.MethodPost, "/vm/reconcile", bytes.NewReader(buf))
+	rr := httptest.NewRecorder()
+	// Assumes an exported factory or test seam that constructs the reconcile handler with cfg.
+	newReconcileHandlerForTest(cfg).ServeHTTP(rr, req)
+	require.Equal(t, http.StatusConflict, rr.Code)
+	assert.Contains(t, rr.Body.String(), "approve_required")
+	assert.Contains(t, rr.Body.String(), "devm approve")
+}
+
+func TestReconcile_ProceedsWhenNotDiverged(t *testing.T) {
+	cfg, _, projDir, store := approveTestSetup(t, "proj-1", "project:\n  name: p\n", "")
+	require.NoError(t, store.Write("proj-1", []byte("project:\n  name: p\n"), nil, nil, nil, "user"))
+	body := VMReconcileRequest{Name: "proj-1", WorkspaceHostPath: projDir, Cfg: schema.Config{Project: schema.Project{Name: "p"}}}
+	buf, _ := json.Marshal(body)
+	req := httptest.NewRequest(http.MethodPost, "/vm/reconcile", bytes.NewReader(buf))
+	rr := httptest.NewRecorder()
+	newReconcileHandlerForTest(cfg).ServeHTTP(rr, req)
+	// The handler will still return an error further down (no fake VM), but NOT 409 approve_required.
+	assert.NotEqual(t, http.StatusConflict, rr.Code)
+	assert.NotContains(t, rr.Body.String(), "approve_required")
+}
+
+// TestReconcile_BootstrapsSnapshotOnFirstSight verifies that /vm/reconcile
+// on a fresh project (no approve snapshot yet, no prior /vm/start) writes
+// the current devm.yaml as the baseline and proceeds — mirroring
+// /vm/start's first-run behavior. Prevents the earlier regression where
+// reconcile-before-start refused with 409 approve_required for lack of a
+// baseline.
+func TestReconcile_BootstrapsSnapshotOnFirstSight(t *testing.T) {
+	cfg, _, projDir, store := approveTestSetup(t, "proj-1", "project:\n  name: p\n", "")
+	// No prior snapshot: reconcile is the first-sight event.
+	_, hasSnap, err := store.Read("proj-1")
+	require.NoError(t, err)
+	require.False(t, hasSnap, "test setup: snapshot must not exist yet")
+
+	body := VMReconcileRequest{Name: "proj-1", WorkspaceHostPath: projDir, Cfg: schema.Config{Project: schema.Project{Name: "p"}}}
+	buf, _ := json.Marshal(body)
+	req := httptest.NewRequest(http.MethodPost, "/vm/reconcile", bytes.NewReader(buf))
+	rr := httptest.NewRecorder()
+	newReconcileHandlerForTest(cfg).ServeHTTP(rr, req)
+
+	// The handler continues past the approve gate (may fail later with no
+	// fake VM), but must NOT refuse with 409 approve_required.
+	assert.NotEqual(t, http.StatusConflict, rr.Code)
+	assert.NotContains(t, rr.Body.String(), "approve_required")
+
+	// The bootstrap must have written the current devm.yaml as the baseline.
+	snap, hasSnap, err := store.Read("proj-1")
+	require.NoError(t, err)
+	require.True(t, hasSnap, "reconcile must bootstrap the snapshot on first sight")
+	assert.Equal(t, "project:\n  name: p\n", string(snap.DevmYAML))
+}
+
+// TestReconcile_RequiresWorkspaceHostPath verifies /vm/reconcile rejects
+// a request with a name but no workspace_host_path (400), rather than
+// reaching the approve-gate check and reading a relative "devm.yaml"
+// off the daemon's own cwd.
+func TestReconcile_RequiresWorkspaceHostPath(t *testing.T) {
+	cfg := identity.Config{Name: "devm-test"}
+	body := VMReconcileRequest{Name: "proj-1", Cfg: schema.Config{Project: schema.Project{Name: "p"}}}
+	buf, err := json.Marshal(body)
+	require.NoError(t, err)
+	req := httptest.NewRequest(http.MethodPost, "/vm/reconcile", bytes.NewReader(buf))
+	rr := httptest.NewRecorder()
+	newReconcileHandlerForTest(cfg).ServeHTTP(rr, req)
+	require.Equal(t, http.StatusBadRequest, rr.Code)
+	assert.Contains(t, rr.Body.String(), "workspace_host_path")
+}
+
+// Minimal stubs for test seam; these are never called in approve-gate tests
+// since the gate check runs before actual reconcile work.
+type testApplyStub struct{}
+
+func (t *testApplyStub) ApplyLive(changes []reconcile.Change, cfg schema.Config, repoRoot, daemonRuntimeDir, vmName string, caPEM, sshAuthPub, sshHostPriv, sshHostPub []byte, identCfg identity.Config, ironProxyURL string) error {
+	return nil
+}
+
+type testPackagesStub struct{}
+
+func (t *testPackagesStub) ApplyPackages(ctx context.Context, projectID string, snapCfg schema.Config, macCwd string, adds, removes []string) error {
+	return nil
+}
+
+type testTartListStub struct{}
+
+func (t *testTartListStub) List(ctx context.Context) ([]tart.VM, error) {
+	return []tart.VM{}, nil
+}
+
+// newReconcileHandlerForTest is exposed for approve-gate tests; production code uses the mux registration below.
+func newReconcileHandlerForTest(cfg identity.Config) http.Handler {
+	// For testing, use a minimal lock and stub implementations.
+	// The approve gate check runs before any actual reconcile work,
+	// so these stubs are never actually called in the approve-gate test flow.
+	locks := NewProjectLocks()
+	return reconcileHandler(cfg, NewStateCache(), locks, &testApplyStub{}, &testPackagesStub{}, &testTartListStub{}, supervisor.New("/tmp"), nil, 0)
+}
+
+// TestVMReconcile_LiveApplyStampsBundleFingerprintOnSnapshot pins the
+// stamp at the tail of the live-apply branch (reconcile.go:353): a
+// running VM whose stored BundleFingerprint has drifted from
+// CurrentBundleFingerprint(cache) must, after a successful live-apply,
+// have the snapshot rewritten with the current fingerprint. Without the
+// stamp the drift re-emits KindBundleRefresh every reconcile forever.
+func TestVMReconcile_LiveApplyStampsBundleFingerprintOnSnapshot(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	createTestCA(t)
+
+	oldCfg := schema.Config{
+		Project: schema.Project{Name: "p"},
+		Env:     map[string]schema.EnvValue{"FOO": {Literal: "old"}},
+	}
+	require.NoError(t, WriteStateSnapshot(identity.Prod, "p", StateSnapshot{
+		Cfg:               oldCfg,
+		BundleFingerprint: "old-fp",
+	}))
+
+	newCfg := oldCfg
+	newCfg.Env = map[string]schema.EnvValue{"FOO": {Literal: "new"}}
+
+	registerFakeSoftnet(t, "p")
+	projDir, _ := setupProjectDirWithDevm(t, "p", "project:\n  name: p\nenv:\n  FOO: old\n", "")
+
+	req := VMReconcileRequest{Name: "p", Cfg: newCfg, WorkspaceHostPath: projDir}
+	body, _ := json.Marshal(req)
+
+	cache := NewStateCache()
+	cache.SetBuild(Build{Fingerprint: "new-fp"})
+
+	server := NewServer(identity.Prod.SocketPath(), Build{})
+	locks := NewProjectLocks()
+	RegisterReconcileHandler(server, identity.Prod, cache, locks, &fakeApply{}, &fakePackages{}, &fakeTartList{running: true, vmName: "p"}, supervisor.New(t.TempDir()), nil, 0)
+
+	rec := httptest.NewRecorder()
+	server.mux.ServeHTTP(rec, httptest.NewRequest("POST", "/vm/reconcile", bytes.NewReader(body)))
+	require.Equal(t, http.StatusOK, rec.Code, "body=%s", rec.Body.String())
+
+	got, err := ReadStateSnapshot(identity.Prod, "p")
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	assert.Equal(t, "new-fp", got.BundleFingerprint,
+		"live-apply must stamp the current bundle fingerprint or drift re-emits forever")
+}
+
+// TestVMReconcile_StoppedVM_StaleFingerprint_ReturnsPending pins the
+// stopped-VM UX: a bundle-fingerprint drift on a stopped VM must
+// surface on the response's Pending field so the CLI can say the
+// refresh will apply on next start, instead of the misleading
+// "Sandbox converged; no changes." verdict.
+func TestVMReconcile_StoppedVM_StaleFingerprint_ReturnsPending(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	cfg := schema.Config{Project: schema.Project{Name: "p"}}
+	require.NoError(t, WriteStateSnapshot(identity.Prod, "p", StateSnapshot{
+		Cfg:               cfg,
+		BundleFingerprint: "old-fp",
+	}))
+
+	projDir := setupProjectDirForCfg(t, "p", cfg)
+	req := VMReconcileRequest{Name: "p", Cfg: cfg, WorkspaceHostPath: projDir}
+	body, _ := json.Marshal(req)
+
+	cache := NewStateCache()
+	cache.SetBuild(Build{Fingerprint: "new-fp"})
+
+	server := NewServer(identity.Prod.SocketPath(), Build{})
+	locks := NewProjectLocks()
+	RegisterReconcileHandler(server, identity.Prod, cache, locks, &fakeApply{}, &fakePackages{}, &fakeTartList{running: false, vmName: "p"}, supervisor.New(t.TempDir()), nil, 0)
+
+	rec := httptest.NewRecorder()
+	server.mux.ServeHTTP(rec, httptest.NewRequest("POST", "/vm/reconcile", bytes.NewReader(body)))
+	require.Equal(t, http.StatusOK, rec.Code, "body=%s", rec.Body.String())
+
+	var resp VMReconcileResponse
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
+	assert.Equal(t, "stopped", resp.SandboxState)
+	assert.Empty(t, resp.Applied,
+		"stopped VM must not stamp anything as Applied")
+	assert.Contains(t, changeKinds(resp.Pending), reconcile.KindBundleRefresh,
+		"stopped-VM bundle drift must surface as Pending so the CLI can announce it")
+}
+
+// TestReconcile_OrphanSnapshotSurfacedAsWarning_RestLandsCleanly pins
+// that a snapshot archive dir with no matching `snapshots:` entry in
+// the current yaml surfaces as a non-fatal warning on the reconcile
+// response, while a live change in the same reconcile still applies.
+// The whole point of the warning plumbing is that orphans never refuse
+// the loop — they just point the operator at `devm snapshot clear`.
+func TestReconcile_OrphanSnapshotSurfacedAsWarning_RestLandsCleanly(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	createTestCA(t)
+
+	// Baseline snapshot + yaml declare no snapshots entries. The orphan
+	// archive dir for "pg" exists on disk but is no longer declared —
+	// the exact scenario this warning path is for.
+	oldCfg := schema.Config{
+		Project: schema.Project{Name: "p"},
+		Env:     map[string]schema.EnvValue{"FOO": {Literal: "old"}},
+	}
+	require.NoError(t, WriteStateSnapshot(identity.Prod, "p", StateSnapshot{Cfg: oldCfg}))
+
+	// Create the orphan archive dir under <RuntimeDir>/p/snapshots/pg.
+	// Contents don't matter: DiscoverOrphans only cares that the dir
+	// exists under <RuntimeDir>/<projectID>/snapshots/.
+	orphanDir := filepath.Join(identity.Prod.RuntimeDir(), "p", "snapshots", "pg")
+	require.NoError(t, os.MkdirAll(orphanDir, 0o755))
+
+	// Live change so we can assert "rest of reconcile still lands."
+	newCfg := oldCfg
+	newCfg.Env = map[string]schema.EnvValue{"FOO": {Literal: "new"}}
+
+	registerFakeSoftnet(t, "p")
+
+	projDir, _ := setupProjectDirWithDevm(t, "p", "project:\n  name: p\nenv:\n  FOO: old\n", "")
+	req := VMReconcileRequest{Name: "p", Cfg: newCfg, WorkspaceHostPath: projDir}
+	body, _ := json.Marshal(req)
+
+	server := NewServer(identity.Prod.SocketPath(), Build{})
+	locks := NewProjectLocks()
+	fake := &fakeApply{}
+	RegisterReconcileHandler(server, identity.Prod, NewStateCache(), locks, fake, &fakePackages{}, &fakeTartList{running: true, vmName: "p"}, supervisor.New(t.TempDir()), nil, 0)
+
+	rec := httptest.NewRecorder()
+	server.mux.ServeHTTP(rec, httptest.NewRequest("POST", "/vm/reconcile", bytes.NewReader(body)))
+	require.Equal(t, http.StatusOK, rec.Code, "body=%s", rec.Body.String())
+
+	var resp VMReconcileResponse
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
+
+	// Orphan surfaced verbatim — operator sees the remediation command
+	// in the same wording `devm status` will print.
+	require.Len(t, resp.Warnings, 1)
+	assert.Contains(t, resp.Warnings[0], `snapshot "pg" orphaned`)
+	assert.Contains(t, resp.Warnings[0], `devm snapshot clear pg`)
+
+	// Rest of reconcile still lands: live change applied, snapshot updated.
+	assert.True(t, fake.called, "live apply must still fire alongside orphan warning")
+	assert.NotEmpty(t, resp.Applied, "live FOO change must still appear in Applied")
+	got, err := ReadStateSnapshot(identity.Prod, "p")
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	assert.Equal(t, "new", got.Cfg.Env["FOO"].Literal,
+		"live change must land in snapshot — orphan is advisory only")
+}
+
+// TestReconcile_NoOrphans_NoWarnings pins that an empty orphan set
+// omits the Warnings field entirely (the `omitempty` tag keeps the
+// JSON clean for the common case).
+func TestReconcile_NoOrphans_NoWarnings(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	cfg := schema.Config{Project: schema.Project{Name: "p"}}
+	require.NoError(t, WriteStateSnapshot(identity.Prod, "p", StateSnapshot{Cfg: cfg}))
+
+	projDir := setupProjectDirForCfg(t, "p", cfg)
+	req := VMReconcileRequest{Name: "p", Cfg: cfg, WorkspaceHostPath: projDir}
+	body, _ := json.Marshal(req)
+
+	server := NewServer(identity.Prod.SocketPath(), Build{})
+	locks := NewProjectLocks()
+	RegisterReconcileHandler(server, identity.Prod, NewStateCache(), locks, &fakeApply{}, &fakePackages{}, &fakeTartList{running: true, vmName: "p"}, supervisor.New(t.TempDir()), nil, 0)
+
+	rec := httptest.NewRecorder()
+	server.mux.ServeHTTP(rec, httptest.NewRequest("POST", "/vm/reconcile", bytes.NewReader(body)))
+	require.Equal(t, http.StatusOK, rec.Code, "body=%s", rec.Body.String())
+
+	var resp VMReconcileResponse
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
+	assert.Nil(t, resp.Warnings, "no orphans → Warnings must be nil")
+}

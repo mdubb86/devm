@@ -1,0 +1,27 @@
+package scripts
+
+import _ "embed"
+
+//go:embed install-templates.sh
+var InstallTemplates string
+
+//go:embed with-devm-env.sh
+var WithDevmEnv string
+
+//go:embed install.sh.tmpl
+var InstallTemplate string
+
+//go:embed etc-profile-devm.sh
+var EtcProfileDevm string
+
+//go:embed gdevm-serve.service
+var GdevmServeUnit string
+
+//go:embed filestash.service
+var EmbeddedFilestashSystemdUnit string
+
+//go:embed embed/filestash
+var EmbeddedFilestashBinary []byte
+
+//go:embed embed/filestash-config.json
+var EmbeddedFilestashConfig []byte

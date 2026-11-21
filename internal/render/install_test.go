@@ -1,0 +1,369 @@
+package render
+
+import (
+	"os"
+	"os/exec"
+	"path/filepath"
+	"regexp"
+	"strings"
+	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+)
+
+func TestRenderInstallScript_SubstitutesVersion(t *testing.T) {
+	body, err := RenderInstallScript("0.18.1")
+	require.NoError(t, err)
+	s := string(body)
+	assert.Contains(t, s, "/home/devm/.mutagen/agents/0.18.1")
+	assert.NotContains(t, s, "{{.MutagenVersion}}",
+		"template placeholder must be substituted")
+}
+
+func TestRenderInstallScript_PreservesLiterals(t *testing.T) {
+	// Every non-templated part of install.sh should render byte-identical
+	// to the untemplated version. Assert on a few load-bearing literals.
+	body, err := RenderInstallScript("0.18.1")
+	require.NoError(t, err)
+	s := string(body)
+	assert.Contains(t, s, "update-ca-certificates --fresh",
+		"CA install block must survive templating")
+	assert.Contains(t, s, "for f in /opt/devm/bin/*",
+		"bin loop must survive templating")
+	assert.Contains(t, s, "systemctl unmask ssh",
+		"ssh unmask must survive templating")
+}
+
+func TestRenderInstallScript_EnablesAndRestartsGdevmServe(t *testing.T) {
+	// Pins that a cold-start (and any re-run of install.sh, which is
+	// also the bundle-refresh / reconcile path — see
+	// devmbundle.GuestInstallScript) reloads systemd, enables
+	// gdevm-serve, and restarts it so a refreshed binary is picked up.
+	body, err := RenderInstallScript("0.18.1")
+	require.NoError(t, err)
+	s := string(body)
+	assert.Contains(t, s, "systemctl daemon-reload")
+	assert.Contains(t, s, "systemctl enable gdevm-serve.service")
+	assert.Contains(t, s, "systemctl restart gdevm-serve.service")
+}
+
+func TestRenderInstallScript_ChownsGdevmLogsBeforeRestart(t *testing.T) {
+	// gdevm-serve runs as the devm user, so /var/log/gdevm must be
+	// devm-owned before the service restarts; systemd's LogsDirectory=
+	// only chowns on create, so this chown is what covers the directory
+	// surviving across reinstalls. Ordering matters — chown before
+	// restart, or the newly-restarted serve fails to open its state dir.
+	body, err := RenderInstallScript("0.18.1")
+	require.NoError(t, err)
+	s := string(body)
+
+	chownIdx := strings.Index(s, "chown -R devm:devm /var/log/gdevm")
+	require.NotEqual(t, -1, chownIdx, "chown of /var/log/gdevm must be present")
+
+	restartIdx := strings.Index(s, "systemctl restart gdevm-serve.service")
+	require.NotEqual(t, -1, restartIdx, "gdevm-serve restart must be present")
+
+	assert.Less(t, chownIdx, restartIdx,
+		"chown of /var/log/gdevm must run before the gdevm-serve restart")
+
+	// The install -d ahead of the chown must also be present so the
+	// cold-install case (directory absent) lands here with the right
+	// ownership and mode without relying on systemd's create path.
+	installDirIdx := strings.Index(s, "install -d -o devm -g devm -m 0755 /var/log/gdevm")
+	require.NotEqual(t, -1, installDirIdx, "install -d of /var/log/gdevm must be present")
+	assert.Less(t, installDirIdx, chownIdx,
+		"install -d of /var/log/gdevm must precede its chown")
+}
+
+func TestRenderInstallScript_RestartsGdevmServeAfterBinInstalled(t *testing.T) {
+	// gdevm-serve's ExecStart points at /usr/local/bin/gdevm, which the
+	// "for f in /opt/devm/bin/*" loop is what installs. On a cold VM
+	// boot nothing else puts a binary there first, so the restart must
+	// come strictly after that loop — restarting before it exists makes
+	// systemctl fail and, under `set -e`, aborts the rest of install.sh
+	// (SSH material, Docker shims, Mutagen agent pre-install).
+	body, err := RenderInstallScript("0.18.1")
+	require.NoError(t, err)
+	s := string(body)
+
+	binLoopIdx := strings.Index(s, "for f in /opt/devm/bin/*")
+	require.NotEqual(t, -1, binLoopIdx, "bin install loop must be present")
+
+	restartIdx := strings.Index(s, "systemctl restart gdevm-serve.service")
+	require.NotEqual(t, -1, restartIdx, "gdevm-serve restart must be present")
+
+	assert.Less(t, binLoopIdx, restartIdx,
+		"gdevm-serve restart must run after the /opt/devm/bin/* install loop, not before")
+}
+
+func TestRenderInstallScript_RejectsEmptyVersion(t *testing.T) {
+	_, err := RenderInstallScript("")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "mutagen version")
+}
+
+func TestRenderInstallScript_HasClientSSHSection(t *testing.T) {
+	body, err := RenderInstallScript("0.18.1")
+	require.NoError(t, err)
+	s := string(body)
+	for _, want := range []string{
+		"client-SSH material",
+		"install -m 0600 -o devm -g devm /opt/devm/ssh-client/config /home/devm/.ssh/config",
+		"install -m 0600 -o devm -g devm /opt/devm/ssh-client/devm-jump-id /home/devm/.ssh/devm-jump-id",
+		"systemctl enable --now devm-ssh-agent-bridge.service",
+		"systemctl disable --now devm-ssh-agent-bridge.service",
+	} {
+		assert.Contains(t, s, want, "install.sh missing %q", want)
+	}
+
+	// The if-branch installs the unit and then enables it — systemd must
+	// have reloaded first or `enable` picks up the old path. The else-
+	// branch removes the unit file and must reload after to drop the
+	// cached path reference, or `systemctl status` keeps pointing at a
+	// file that no longer exists.
+	installUnitIdx := strings.Index(s, "install -m 0644 /opt/devm/ssh-client/devm-ssh-agent-bridge.service /etc/systemd/system/")
+	require.NotEqual(t, -1, installUnitIdx, "unit install step must be present")
+	enableIdx := strings.Index(s, "systemctl enable --now devm-ssh-agent-bridge.service")
+	require.NotEqual(t, -1, enableIdx, "enable step must be present")
+	reloadBeforeEnable := strings.Index(s[installUnitIdx:enableIdx], "systemctl daemon-reload")
+	assert.NotEqual(t, -1, reloadBeforeEnable,
+		"daemon-reload must run between install and enable (if-branch)")
+
+	rmIdx := strings.Index(s, "rm -f /etc/systemd/system/devm-ssh-agent-bridge.service")
+	require.NotEqual(t, -1, rmIdx, "else-branch rm step must be present")
+	// Pin the reload to the else-branch itself (before the closing `fi`
+	// of the client-SSH block) so we don't silently match a later
+	// daemon-reload from the gdevm-serve or filestash sections.
+	elseEnd := strings.Index(s[rmIdx:], "\nfi\n")
+	require.NotEqual(t, -1, elseEnd, "else-branch close must follow the rm")
+	elseBranch := s[rmIdx : rmIdx+elseEnd]
+	assert.Contains(t, elseBranch, "systemctl daemon-reload",
+		"daemon-reload must run inside the else-branch, after rm -f")
+}
+
+func TestRenderInstallScript_InstallsSizingConf(t *testing.T) {
+	body, err := RenderInstallScript("0.18.1")
+	require.NoError(t, err)
+	s := string(body)
+	assert.Contains(t, s, "/opt/devm/sizing/conf")
+	assert.Contains(t, s, "/etc/devm/sizing.conf")
+	assert.Contains(t, s, "install -d") // ensures /etc/devm is created with a mode
+}
+
+func TestRenderInstallScript_SizingBeforeSwapServiceCanRead(t *testing.T) {
+	// The sizing.conf drop MUST happen before anything that might
+	// trigger devm-swap-setup to re-run. install.sh.tmpl runs during
+	// the bundle stage, which is before user/enforced provisioning;
+	// the service's own next-boot run reads the landed file. Assert
+	// the drop block literally appears in the rendered script (if it
+	// doesn't, the base-image swap setup falls back to "50%" on the
+	// next boot after any devm.yaml change).
+	body, err := RenderInstallScript("0.18.1")
+	require.NoError(t, err)
+	s := string(body)
+	assert.Contains(t, s,
+		"install -m 0644 /opt/devm/sizing/conf /etc/devm/sizing.conf",
+		"sizing.conf drop block must be present in the rendered install script")
+}
+
+func TestRenderInstallScript_RestartsSwapAfterSizingDrop(t *testing.T) {
+	// The directive file is read by devm-swap.service at every boot's
+	// local-fs stage; without a same-boot restart, a reconcile warm-boot
+	// drops the new file but the service goes on running with the pre-
+	// reconcile size until the NEXT boot. `try-restart` after the drop
+	// closes that gap. The order matters — a restart before the file is
+	// in place would re-read the OLD directive.
+	body, err := RenderInstallScript("0.18.1")
+	require.NoError(t, err)
+	s := string(body)
+	dropIdx := strings.Index(s, "install -m 0644 /opt/devm/sizing/conf /etc/devm/sizing.conf")
+	restartIdx := strings.Index(s, "systemctl try-restart devm-swap.service")
+	require.NotEqual(t, -1, dropIdx, "sizing.conf drop must be present")
+	require.NotEqual(t, -1, restartIdx, "swap-service try-restart must be present")
+	require.Less(t, dropIdx, restartIdx, "restart must come after the file drop")
+}
+
+func TestRenderInstallScript_RestartsBuildkitCacheAfterSizingDrop(t *testing.T) {
+	// Same reasoning as the swap try-restart: the sizing-aware buildkit
+	// cache oneshot reads /etc/devm/sizing.conf's build_cache= directive,
+	// so a warm-boot reconcile that just dropped a changed directive
+	// needs the service re-run to pick it up in the same boot.
+	// devm-buildkit-cache.service is co-named on the same try-restart
+	// line as devm-swap.service; it is a no-op on a `docker.enabled:false`
+	// guest where the oneshot never got installed.
+	body, err := RenderInstallScript("0.18.1")
+	require.NoError(t, err)
+	s := string(body)
+	dropIdx := strings.Index(s, "install -m 0644 /opt/devm/sizing/conf /etc/devm/sizing.conf")
+	restartIdx := strings.Index(s, "systemctl try-restart devm-swap.service devm-buildkit-cache.service")
+	require.NotEqual(t, -1, dropIdx, "sizing.conf drop must be present")
+	require.NotEqual(t, -1, restartIdx, "co-named swap + buildkit-cache try-restart must be present")
+	require.Less(t, dropIdx, restartIdx, "restart must come after the file drop")
+}
+
+func TestRenderInstallScript_InstallsSnapshotUnits(t *testing.T) {
+	body, err := RenderInstallScript("0.18.1")
+	require.NoError(t, err)
+	s := string(body)
+	assert.Contains(t, s, "/opt/devm/systemd/devm-snapshot-",
+		"install.sh must reference the staged snapshot units in /opt/devm/systemd")
+	assert.Contains(t, s, "/opt/devm/snapshots/manifest",
+		"install.sh must read the snapshot manifest written by the bundle")
+	assert.Contains(t, s, "systemctl enable --now devm-snapshot-",
+		"install.sh must enable each declared snapshot timer")
+	assert.Contains(t, s, "systemctl daemon-reload",
+		"install.sh must reload systemd after writing snapshot units")
+}
+
+func TestRenderInstallScript_OrphanSnapshotCleanup(t *testing.T) {
+	body, err := RenderInstallScript("0.18.1")
+	require.NoError(t, err)
+	s := string(body)
+	assert.Contains(t, s, "/etc/systemd/system/devm-snapshot-",
+		"install.sh must look at the installed timer set when pruning orphans")
+	assert.Contains(t, s, "systemctl disable --now devm-snapshot-",
+		"orphan cleanup must disable the timer before removal")
+	assert.Contains(t, s, "rm -f",
+		"orphan cleanup must remove the stale unit files")
+}
+
+func TestRenderInstallScript_SnapshotBlockAfterUserUnitsBeforeGdevm(t *testing.T) {
+	body, err := RenderInstallScript("0.18.1")
+	require.NoError(t, err)
+	s := string(body)
+	// The snapshot section depends on the user-units loop having
+	// landed `.service`/`.timer` files under /opt/devm/systemd — and
+	// on the bin loop having staged /usr/local/bin/gdevm (ExecStart
+	// target) — before we enable any timer. The gdevm-serve restart
+	// block must stay last so a timer can't fire before the serve
+	// binary is in place.
+	userUnitsIdx := strings.Index(s, "for f in /opt/devm/systemd/*.service")
+	require.NotEqual(t, -1, userUnitsIdx, "user-units loop must be present")
+
+	snapshotIdx := strings.Index(s, "/opt/devm/snapshots/manifest")
+	require.NotEqual(t, -1, snapshotIdx, "snapshot block must be present")
+
+	gdevmRestartIdx := strings.Index(s, "systemctl restart gdevm-serve.service")
+	require.NotEqual(t, -1, gdevmRestartIdx, "gdevm-serve restart must be present")
+
+	assert.Less(t, userUnitsIdx, snapshotIdx,
+		"snapshot block must run after the user-units loop that stages /etc/systemd/system/")
+	assert.Less(t, snapshotIdx, gdevmRestartIdx,
+		"snapshot block must precede the gdevm-serve restart")
+}
+
+func TestRenderInstallScript_DifferentVersionsProduceDifferentOutput(t *testing.T) {
+	a, err := RenderInstallScript("0.18.1")
+	require.NoError(t, err)
+	b, err := RenderInstallScript("0.19.0")
+	require.NoError(t, err)
+	assert.NotEqual(t, a, b, "version bump should change rendered output")
+	assert.Contains(t, string(a), "0.18.1")
+	assert.Contains(t, string(b), "0.19.0")
+	assert.NotContains(t, string(a), "0.19.0")
+	assert.NotContains(t, string(b), "0.18.1")
+}
+
+func TestRenderInstallScript_CronStartsOnlyWhenEnforced(t *testing.T) {
+	body, err := RenderInstallScript("0.18.1")
+	require.NoError(t, err)
+	s := string(body)
+	gate := "if systemctl is-active --quiet devm.target; then"
+	gateIdx := strings.Index(s, gate)
+	require.NotEqual(t, -1, gateIdx, "timers must be gated on devm.target being active")
+	fiIdx := strings.Index(s[gateIdx:], "\nfi\n")
+	require.NotEqual(t, -1, fiIdx, "gate must be closed by a top-level fi")
+	gated := s[gateIdx : gateIdx+fiIdx]
+	assert.Contains(t, gated, "restart devm-cron-", "restart must sit inside the is-active gate")
+	assert.Equal(t, 1, strings.Count(s, "restart devm-cron-"),
+		"the only start path is the gated restart")
+}
+
+// section returns the install script text from start up to (excluding) end.
+func section(t *testing.T, s, start, end string) string {
+	t.Helper()
+	i := strings.Index(s, start)
+	require.NotEqual(t, -1, i, "missing %q", start)
+	j := strings.Index(s[i:], end)
+	require.NotEqual(t, -1, j, "missing %q", end)
+	return s[i : i+j]
+}
+
+func TestRenderInstallScript_ManifestsReadWithoutFallback(t *testing.T) {
+	body, err := RenderInstallScript("0.18.1")
+	require.NoError(t, err)
+	s := string(body)
+	snap := section(t, s, "# --- Snapshot timers", "# --- Cron timers")
+	cron := section(t, s, "# --- Cron timers", "# --- SSH material")
+	assert.Contains(t, snap, "manifest=$(cat /opt/devm/snapshots/manifest)")
+	assert.Contains(t, cron, "cron_manifest=$(cat /opt/devm/cron/manifest)")
+	for name, blk := range map[string]string{"snapshot": snap, "cron": cron} {
+		assert.NotContains(t, blk, "[ -f /opt/devm/", "%s manifest must not have an absent-file fallback", name)
+		assert.NotContains(t, blk, "|| true", "%s block must not swallow errors", name)
+		assert.NotContains(t, blk, "2>/dev/null", "%s block must not swallow errors", name)
+	}
+}
+
+func TestRenderInstallScript_CronOrphanServiceAndStop(t *testing.T) {
+	body, err := RenderInstallScript("0.18.1")
+	require.NoError(t, err)
+	cron := section(t, string(body), "# --- Cron timers", "# --- SSH material")
+	assert.Contains(t, cron, "/etc/systemd/system/devm-cron-*.service",
+		"orphan walk must include leftover .service files")
+	assert.Contains(t, cron, `for unit in timer service`,
+		"orphan cleanup must stop both the timer and the service")
+	assert.Contains(t, cron, `systemctl stop devm-cron-"$name"."$unit"`)
+	stopIdx := strings.Index(cron, "systemctl stop")
+	rmIdx := strings.Index(cron, "rm -f")
+	assert.Less(t, stopIdx, rmIdx, "units must be stopped before their files are removed")
+}
+
+func TestRenderInstallScript_CronNeverEnabled(t *testing.T) {
+	body, err := RenderInstallScript("0.18.1")
+	require.NoError(t, err)
+	re := regexp.MustCompile(`enable.*devm-cron-`)
+	for _, line := range strings.Split(string(body), "\n") {
+		assert.False(t, re.MatchString(line), "cron units must never be enabled: %q", line)
+	}
+}
+
+func TestRenderInstallScript_CronOrphanCleanup(t *testing.T) {
+	body, err := RenderInstallScript("0.18.1")
+	require.NoError(t, err)
+	s := string(body)
+	assert.Contains(t, s, "/opt/devm/cron/manifest")
+	assert.Contains(t, s, `rm -f "/etc/systemd/system/devm-cron-`)
+	assert.Contains(t, s, `/opt/devm/cron-wrappers/$name.sh`,
+		"orphan cleanup must remove the stale wrapper")
+	assert.Contains(t, s, "/opt/devm/systemd/devm-cron-*.timer",
+		"cron timers must be installed from the bundle")
+}
+
+func TestRenderInstallScript_OrphanCleanupRemovesStagedCopies(t *testing.T) {
+	body, err := RenderInstallScript("0.18.1")
+	require.NoError(t, err)
+	s := string(body)
+	for _, unit := range []string{
+		`"/opt/devm/systemd/devm-cron-$name.timer"`,
+		`"/opt/devm/systemd/devm-cron-$name.service"`,
+		`"/opt/devm/systemd/devm-snapshot-$name.timer"`,
+		`"/opt/devm/systemd/devm-snapshot-$name.service"`,
+	} {
+		assert.Contains(t, s, unit,
+			"orphan cleanup must remove the staged copy the tar extract leaves behind")
+	}
+}
+
+func TestRenderInstallScript_PassesShSyntaxCheck(t *testing.T) {
+	dash, err := exec.LookPath("dash")
+	if err != nil {
+		t.Skip("dash not installed; the guest runs install.sh under dash and bash -n is not a substitute")
+	}
+	body, err := RenderInstallScript("0.18.1")
+	require.NoError(t, err)
+	path := filepath.Join(t.TempDir(), "install.sh")
+	require.NoError(t, os.WriteFile(path, body, 0o600))
+	out, err := exec.Command(dash, "-n", path).CombinedOutput()
+	require.NoError(t, err, string(out))
+}

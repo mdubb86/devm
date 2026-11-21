@@ -1,0 +1,68 @@
+package serviceapi
+
+import (
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"testing"
+
+	"github.com/mdubb86/devm/internal/identity"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+)
+
+func TestHandshake_WithProjectID(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	build := Build{Version: "dev", Commit: "abc123", Fingerprint: "fp1"}
+	srv := NewServer(identity.Prod.SocketPath(), build)
+	cache := NewStateCache()
+	cache.SetBuild(build)
+	cache.SetIronProxyHealth("p", ProxyHealth{Status: ProxyMissing})
+	RegisterHandshakeHandler(srv, cache)
+
+	rec := httptest.NewRecorder()
+	srv.mux.ServeHTTP(rec, httptest.NewRequest("GET", "/handshake?name=p", nil))
+	require.Equal(t, http.StatusOK, rec.Code, "body=%s", rec.Body.String())
+
+	var resp HandshakeResponse
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
+	assert.Equal(t, build, resp.Build)
+	require.NotNil(t, resp.Proxy)
+	assert.Equal(t, ProxyMissing, resp.Proxy.Status)
+}
+
+func TestHandshake_UnknownProjectID_NilProxy(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	build := Build{Version: "dev", Commit: "abc123", Fingerprint: "fp1"}
+	srv := NewServer(identity.Prod.SocketPath(), build)
+	cache := NewStateCache()
+	cache.SetBuild(build)
+	RegisterHandshakeHandler(srv, cache)
+
+	rec := httptest.NewRecorder()
+	srv.mux.ServeHTTP(rec, httptest.NewRequest("GET", "/handshake?name=never-started", nil))
+	require.Equal(t, http.StatusOK, rec.Code, "body=%s", rec.Body.String())
+
+	var resp HandshakeResponse
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
+	assert.Equal(t, build, resp.Build)
+	assert.Nil(t, resp.Proxy, "a project with no cache row has never run — no proxy health to report")
+}
+
+func TestHandshake_NoProjectID(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	build := Build{Version: "dev", Commit: "abc123", Fingerprint: "fp1"}
+	srv := NewServer(identity.Prod.SocketPath(), build)
+	cache := NewStateCache()
+	cache.SetBuild(build)
+	RegisterHandshakeHandler(srv, cache)
+
+	rec := httptest.NewRecorder()
+	srv.mux.ServeHTTP(rec, httptest.NewRequest("GET", "/handshake", nil))
+	require.Equal(t, http.StatusOK, rec.Code, "body=%s", rec.Body.String())
+
+	var resp HandshakeResponse
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
+	assert.Equal(t, build, resp.Build)
+	assert.Nil(t, resp.Proxy)
+}

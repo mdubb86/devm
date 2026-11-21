@@ -1,0 +1,1094 @@
+package serviceapi
+
+import (
+	"bufio"
+	"bytes"
+	"context"
+	"encoding/json"
+	"fmt"
+	"io"
+	"log"
+	"net"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"strconv"
+	"strings"
+	"sync"
+	"syscall"
+	"testing"
+	"time"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
+	"github.com/mdubb86/devm/internal/identity"
+)
+
+// startBackend boots a tiny HTTP server on a random port that
+// returns `msg` for every GET. Used by the proxy tests to verify
+// end-to-end traffic.
+func startBackend(t *testing.T, msg string) (port int, cleanup func()) {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(msg))
+	}))
+	// httptest URL shape: http://127.0.0.1:PORT
+	url := strings.TrimPrefix(srv.URL, "http://")
+	_, portStr, err := net.SplitHostPort(url)
+	require.NoError(t, err)
+	p, err := strconv.Atoi(portStr)
+	require.NoError(t, err)
+	return p, srv.Close
+}
+
+// withLocalAddr stamps the given IP into the request context exactly
+// as ProxyServer.stampLocalAddr does via ConnContext on a real
+// accepted connection — lets tests exercise the dest-IP dispatch path
+// without binding real per-project listeners (which requires the
+// helper).
+func withLocalAddr(r *http.Request, ip string) *http.Request {
+	ctx := context.WithValue(r.Context(), ctxKeyLocalAddr, &net.TCPAddr{IP: net.ParseIP(ip)})
+	return r.WithContext(ctx)
+}
+
+// setGuestOriginListenersForTest stashes a guest-origin listener pair
+// directly into perProj, standing in for what StartGuestOriginListeners
+// used to do via the now-inlined recordGuestOriginListeners. White-box
+// (package serviceapi) so it can reach perProj/mu directly — tests use
+// it to construct partial/pre-existing perProj states StartGuestOriginListeners
+// itself wouldn't leave behind on a fresh call.
+func setGuestOriginListenersForTest(p *ProxyServer, projectID string, httpLn, httpsLn net.Listener, httpSrv, httpsSrv *http.Server, httpPort, httpsPort int) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	pl := p.perProj[projectID]
+	pl.guestHTTP = httpLn
+	pl.guestHTTPS = httpsLn
+	pl.guestHTTPSrv = httpSrv
+	pl.guestHTTPSSrv = httpsSrv
+	pl.guestHTTPPort = httpPort
+	pl.guestHTTPSPort = httpsPort
+	p.perProj[projectID] = pl
+}
+
+// registerProject stashes a project's ProjectIP in ironProxyState (the
+// package-global registry ServeHTTP's projectByIP reads) and returns a
+// cleanup func. Tests must call it so package-global state doesn't
+// leak across tests.
+func registerProject(t *testing.T, projectID, ip string) {
+	t.Helper()
+	ironProxyState.put(projectID, projectInfo{ProjectIP: ip})
+	t.Cleanup(func() { ironProxyState.del(projectID) })
+}
+
+func TestProxy_HTTP_RoutesByHostWithinProject(t *testing.T) {
+	backPort, cleanup := startBackend(t, "hello from backend")
+	defer cleanup()
+
+	routes := NewRoutes(identity.Prod.TLD)
+	require.NoError(t, routes.Apply("p1", []Route{
+		{Hostname: "app.test", BackendPort: backPort, Mode: ModeLocal, Project: "p1"},
+	}))
+	dir := t.TempDir()
+	ca, err := loadOrGenerateCAAt(identity.Prod, dir)
+	require.NoError(t, err)
+
+	registerProject(t, "p1", "127.42.0.50")
+	proxy := NewProxyServer(identity.Prod, routes, ca)
+
+	req := httptest.NewRequest(http.MethodGet, "http://app.test/", nil)
+	req.Host = "app.test"
+	req = withLocalAddr(req, "127.42.0.50")
+	rec := httptest.NewRecorder()
+	proxy.ServeHTTP(rec, req)
+
+	resp := rec.Result()
+	body, _ := io.ReadAll(resp.Body)
+	assert.Equal(t, 200, resp.StatusCode)
+	assert.Equal(t, "hello from backend", string(body))
+}
+
+func TestProxy_NoLocalAddrInContext_502(t *testing.T) {
+	routes := NewRoutes(identity.Prod.TLD)
+	dir := t.TempDir()
+	ca, err := loadOrGenerateCAAt(identity.Prod, dir)
+	require.NoError(t, err)
+	proxy := NewProxyServer(identity.Prod, routes, ca)
+
+	req := httptest.NewRequest(http.MethodGet, "http://unknown.test/", nil)
+	req.Host = "unknown.test"
+	rec := httptest.NewRecorder()
+	proxy.ServeHTTP(rec, req)
+
+	resp := rec.Result()
+	body, _ := io.ReadAll(resp.Body)
+	assert.Equal(t, 502, resp.StatusCode)
+	assert.Contains(t, string(body), "no route configured for unknown.test")
+}
+
+func TestProxy_DestIPWithNoProject_502NoProject(t *testing.T) {
+	routes := NewRoutes(identity.Prod.TLD)
+	dir := t.TempDir()
+	ca, err := loadOrGenerateCAAt(identity.Prod, dir)
+	require.NoError(t, err)
+	proxy := NewProxyServer(identity.Prod, routes, ca)
+
+	req := httptest.NewRequest(http.MethodGet, "http://app.test/", nil)
+	req.Host = "app.test"
+	req = withLocalAddr(req, "127.42.0.99") // no project owns this IP
+	rec := httptest.NewRecorder()
+	proxy.ServeHTTP(rec, req)
+
+	resp := rec.Result()
+	body, _ := io.ReadAll(resp.Body)
+	assert.Equal(t, 502, resp.StatusCode)
+	assert.Contains(t, string(body), "no project bound at 127.42.0.99")
+}
+
+// TestProxy_HostMismatchAcrossProjects_502NotFallthrough pins the
+// isolation guarantee from the design doc: a Host header naming a
+// hostname that belongs to a DIFFERENT project than the one that owns
+// the dest IP must 502, never silently dial the other project's
+// backend.
+func TestProxy_HostMismatchAcrossProjects_502NotFallthrough(t *testing.T) {
+	backPort, cleanup := startBackend(t, "p1's backend")
+	defer cleanup()
+
+	routes := NewRoutes(identity.Prod.TLD)
+	require.NoError(t, routes.Apply("p1", []Route{
+		{Hostname: "app.test", BackendPort: backPort, Mode: ModeLocal, Project: "p1"},
+	}))
+	dir := t.TempDir()
+	ca, err := loadOrGenerateCAAt(identity.Prod, dir)
+	require.NoError(t, err)
+
+	registerProject(t, "p1", "127.42.0.50")
+	registerProject(t, "p2", "127.42.0.51")
+	proxy := NewProxyServer(identity.Prod, routes, ca)
+
+	// Dial p2's IP but ask for p1's hostname.
+	req := httptest.NewRequest(http.MethodGet, "http://app.test/", nil)
+	req.Host = "app.test"
+	req = withLocalAddr(req, "127.42.0.51")
+	rec := httptest.NewRecorder()
+	proxy.ServeHTTP(rec, req)
+
+	resp := rec.Result()
+	body, _ := io.ReadAll(resp.Body)
+	assert.Equal(t, 502, resp.StatusCode)
+	assert.Contains(t, string(body), "no route configured for app.test")
+	assert.NotContains(t, string(body), "p1's backend")
+}
+
+func TestProxy_BackendUnreachable_502WithDiagnostic(t *testing.T) {
+	routes := NewRoutes(identity.Prod.TLD)
+	require.NoError(t, routes.Apply("p1", []Route{
+		// Port unlikely to be in use — high in the dynamic range.
+		{Hostname: "down.test", BackendPort: 59999, Mode: ModeVM, Project: "p1"},
+	}))
+	dir := t.TempDir()
+	ca, _ := loadOrGenerateCAAt(identity.Prod, dir)
+	registerProject(t, "p1", "127.42.0.52")
+	proxy := NewProxyServer(identity.Prod, routes, ca)
+
+	req := httptest.NewRequest(http.MethodGet, "http://down.test/", nil)
+	req.Host = "down.test"
+	req = withLocalAddr(req, "127.42.0.52")
+	rec := httptest.NewRecorder()
+	proxy.ServeHTTP(rec, req)
+
+	resp := rec.Result()
+	body, _ := io.ReadAll(resp.Body)
+	assert.Equal(t, 502, resp.StatusCode)
+	assert.Contains(t, string(body), "no service listening at down.test")
+}
+
+func TestProxy_BackendHost_ExplicitLocalhost(t *testing.T) {
+	backPort, cleanup := startBackend(t, "from backend")
+	defer cleanup()
+
+	routes := NewRoutes(identity.Prod.TLD)
+	require.NoError(t, routes.Apply("p1", []Route{
+		{Hostname: "app.test", BackendHost: "127.0.0.1", BackendPort: backPort, Mode: ModeLocal, Project: "p1"},
+	}))
+	dir := t.TempDir()
+	ca, err := loadOrGenerateCAAt(identity.Prod, dir)
+	require.NoError(t, err)
+
+	registerProject(t, "p1", "127.42.0.53")
+	proxy := NewProxyServer(identity.Prod, routes, ca)
+
+	req := httptest.NewRequest(http.MethodGet, "http://app.test/", nil)
+	req.Host = "app.test"
+	req = withLocalAddr(req, "127.42.0.53")
+	rec := httptest.NewRecorder()
+	proxy.ServeHTTP(rec, req)
+
+	resp := rec.Result()
+	body, _ := io.ReadAll(resp.Body)
+	assert.Equal(t, 200, resp.StatusCode)
+	assert.Equal(t, "from backend", string(body))
+}
+
+// mockHelperServer starts a UDS listener at a fresh scratch path that
+// mimics enough of the root devm-helper's protocol to satisfy
+// StartProjectListeners. See startMockHelperAt for the protocol
+// details.
+func mockHelperServer(t *testing.T) string {
+	t.Helper()
+	// os.MkdirTemp (not t.TempDir()) keeps the UDS path short enough to
+	// stay under macOS's ~104-byte UNIX_PATH_MAX; t.TempDir() embeds
+	// the test name and can overflow it.
+	dir, err := os.MkdirTemp("", "pxy")
+	require.NoError(t, err)
+	t.Cleanup(func() { os.RemoveAll(dir) })
+	sock := filepath.Join(dir, "helper.sock")
+	return startMockHelperAt(t, sock)
+}
+
+// startMockHelperAt starts a UDS listener at sockPath that mimics
+// enough of the root devm-helper's protocol to satisfy
+// StartProjectListeners: for every connection it reads (and discards)
+// one newline-delimited request, binds a real ephemeral TCP socket,
+// and hands the FD back via SCM_RIGHTS. Serves connections in a loop —
+// StartProjectListeners dials it twice (once for :80, once for :443).
+// Callers pick sockPath so tests can start the helper late (e.g. to
+// exercise the rebind retry loop against an initially-unreachable
+// helper).
+func startMockHelperAt(t *testing.T, sockPath string) string {
+	t.Helper()
+	ln, err := net.Listen("unix", sockPath)
+	require.NoError(t, err)
+	go func() {
+		for {
+			conn, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			go func(c net.Conn) {
+				defer c.Close()
+				uc := c.(*net.UnixConn)
+				if _, err := bufio.NewReader(uc).ReadBytes('\n'); err != nil {
+					return
+				}
+				fd, err := syscall.Socket(syscall.AF_INET, syscall.SOCK_STREAM, 0)
+				if err != nil {
+					return
+				}
+				defer syscall.Close(fd)
+				addr := &syscall.SockaddrInet4{Port: 0}
+				copy(addr.Addr[:], []byte{127, 0, 0, 1})
+				if err := syscall.Bind(fd, addr); err != nil {
+					return
+				}
+				if err := syscall.Listen(fd, 8); err != nil {
+					return
+				}
+				resp, _ := json.Marshal(struct {
+					OK bool `json:"ok"`
+				}{OK: true})
+				oob := syscall.UnixRights(fd)
+				_, _, _ = uc.WriteMsgUnix(resp, oob, nil)
+			}(conn)
+		}
+	}()
+	t.Cleanup(func() {
+		ln.Close()
+		os.Remove(sockPath)
+	})
+	return sockPath
+}
+
+// bindCounter counts helper bind requests per "ip:port" key. Used by
+// the concurrency test to prove StartProjectListeners issues exactly
+// one real bind per port even when many callers race it — a plain
+// success/failure check on StartProjectListeners can't see a
+// duplicate bind, since only one of the two duplicated listener pairs
+// ever survives into perProj; the other is silently orphaned.
+type bindCounter struct {
+	mu     sync.Mutex
+	counts map[string]int
+}
+
+func (b *bindCounter) record(ip string, port int) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.counts == nil {
+		b.counts = make(map[string]int)
+	}
+	b.counts[fmt.Sprintf("%s:%d", ip, port)]++
+}
+
+func (b *bindCounter) bindsFor(key string) int {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.counts[key]
+}
+
+// startCountingMockHelper is startMockHelperAt plus a bindCounter: it
+// parses each request's ip/port before responding so a test can assert
+// how many times a given key was actually bound, not just whether the
+// overall call succeeded.
+func startCountingMockHelper(t *testing.T) (sockPath string, counts *bindCounter) {
+	t.Helper()
+	dir, err := os.MkdirTemp("", "pxyc")
+	require.NoError(t, err)
+	t.Cleanup(func() { os.RemoveAll(dir) })
+	sock := filepath.Join(dir, "helper.sock")
+
+	counts = &bindCounter{}
+	ln, err := net.Listen("unix", sock)
+	require.NoError(t, err)
+	go func() {
+		for {
+			conn, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			go func(c net.Conn) {
+				defer c.Close()
+				uc := c.(*net.UnixConn)
+				line, err := bufio.NewReader(uc).ReadBytes('\n')
+				if err != nil {
+					return
+				}
+				var req struct {
+					IP   string `json:"ip"`
+					Port int    `json:"port"`
+				}
+				if err := json.Unmarshal(line, &req); err == nil {
+					counts.record(req.IP, req.Port)
+				}
+				fd, err := syscall.Socket(syscall.AF_INET, syscall.SOCK_STREAM, 0)
+				if err != nil {
+					return
+				}
+				defer syscall.Close(fd)
+				addr := &syscall.SockaddrInet4{Port: 0}
+				copy(addr.Addr[:], []byte{127, 0, 0, 1})
+				if err := syscall.Bind(fd, addr); err != nil {
+					return
+				}
+				if err := syscall.Listen(fd, 8); err != nil {
+					return
+				}
+				resp, _ := json.Marshal(struct {
+					OK bool `json:"ok"`
+				}{OK: true})
+				oob := syscall.UnixRights(fd)
+				_, _, _ = uc.WriteMsgUnix(resp, oob, nil)
+			}(conn)
+		}
+	}()
+	t.Cleanup(func() {
+		ln.Close()
+		os.Remove(sock)
+	})
+	return sock, counts
+}
+
+// ipGate lets a test control exactly when a gatedMockHelper's response
+// to a bind request for one ip is released, and observe the instant a
+// request for that ip was first received (i.e. the caller is now
+// blocked inside the mock, past whatever lock it needed to acquire to
+// get there).
+type ipGate struct {
+	hitOnce     sync.Once
+	unblockOnce sync.Once
+	hit         chan struct{}
+	gate        chan struct{}
+}
+
+// gatedMockHelper is a mock helper (same wire protocol as
+// startCountingMockHelper) whose response to a bind request for a
+// given ip blocks until the test unblocks that ip. Used to prove
+// StartProjectListeners's per-project lock doesn't serialize unrelated
+// projects: a test can park one project mid-bind and prove a second,
+// different project completes independently.
+type gatedMockHelper struct {
+	mu  sync.Mutex
+	ips map[string]*ipGate
+}
+
+func newGatedMockHelper() *gatedMockHelper {
+	return &gatedMockHelper{ips: make(map[string]*ipGate)}
+}
+
+func (g *gatedMockHelper) entry(ip string) *ipGate {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	e, ok := g.ips[ip]
+	if !ok {
+		e = &ipGate{hit: make(chan struct{}), gate: make(chan struct{})}
+		g.ips[ip] = e
+	}
+	return e
+}
+
+// waitUntilBlocked blocks until the mock has received a bind request
+// for ip and is itself now blocked waiting for that ip to be
+// unblocked — proof the caller made it past whatever lock guards the
+// call, not just that it was scheduled.
+func (g *gatedMockHelper) waitUntilBlocked(ip string) {
+	<-g.entry(ip).hit
+}
+
+// unblock releases every pending and future bind request for ip.
+// Safe to call more than once for the same ip.
+func (g *gatedMockHelper) unblock(ip string) {
+	e := g.entry(ip)
+	e.unblockOnce.Do(func() { close(e.gate) })
+}
+
+// startGatedMockHelper starts a UDS helper mock using gm to gate each
+// ip's response. Protocol mirrors startCountingMockHelper.
+func startGatedMockHelper(t *testing.T, gm *gatedMockHelper) string {
+	t.Helper()
+	dir, err := os.MkdirTemp("", "pxyg")
+	require.NoError(t, err)
+	t.Cleanup(func() { os.RemoveAll(dir) })
+	sock := filepath.Join(dir, "helper.sock")
+
+	ln, err := net.Listen("unix", sock)
+	require.NoError(t, err)
+	go func() {
+		for {
+			conn, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			go func(c net.Conn) {
+				defer c.Close()
+				uc := c.(*net.UnixConn)
+				line, err := bufio.NewReader(uc).ReadBytes('\n')
+				if err != nil {
+					return
+				}
+				var req struct {
+					IP   string `json:"ip"`
+					Port int    `json:"port"`
+				}
+				if err := json.Unmarshal(line, &req); err != nil {
+					return
+				}
+				e := gm.entry(req.IP)
+				e.hitOnce.Do(func() { close(e.hit) })
+				<-e.gate
+
+				fd, err := syscall.Socket(syscall.AF_INET, syscall.SOCK_STREAM, 0)
+				if err != nil {
+					return
+				}
+				defer syscall.Close(fd)
+				addr := &syscall.SockaddrInet4{Port: 0}
+				copy(addr.Addr[:], []byte{127, 0, 0, 1})
+				if err := syscall.Bind(fd, addr); err != nil {
+					return
+				}
+				if err := syscall.Listen(fd, 8); err != nil {
+					return
+				}
+				resp, _ := json.Marshal(struct {
+					OK bool `json:"ok"`
+				}{OK: true})
+				oob := syscall.UnixRights(fd)
+				_, _, _ = uc.WriteMsgUnix(resp, oob, nil)
+			}(conn)
+		}
+	}()
+	t.Cleanup(func() {
+		ln.Close()
+		os.Remove(sock)
+	})
+	return sock
+}
+
+// TestStartProjectListeners_DifferentProjectsDontBlockEachOther proves
+// the per-project bind lock doesn't collapse into a daemon-wide one:
+// runner.go's rebindProjectListeners deliberately fans out one
+// goroutine per project on daemon startup, and a lock granularity
+// broader than "one project" would serialize that fan-out behind
+// whichever project's helper round-trip is slowest.
+//
+// Project B's call is started first and the test waits for its bind
+// request to actually reach the mock (proof B has passed whatever lock
+// guards the critical section) before starting project A's call. B's
+// gate is left closed. Project A's gate is then opened: if the lock is
+// per-project, A proceeds and returns without waiting on B; if the fix
+// regressed to a single lock spanning the bind (e.g. p.mu held across
+// the whole function again), A can't even acquire it — B holds it for
+// the duration of its still-blocked bind — and A never returns.
+func TestStartProjectListeners_DifferentProjectsDontBlockEachOther(t *testing.T) {
+	gm := newGatedMockHelper()
+	sock := startGatedMockHelper(t, gm)
+	cfg := identity.Config{Name: "test-parallel-start", HelperSocketPath: sock}
+
+	dir := t.TempDir()
+	ca, err := loadOrGenerateCAAt(identity.Prod, dir)
+	require.NoError(t, err)
+	proxy := NewProxyServer(cfg, NewRoutes(identity.Prod.TLD), ca)
+
+	const ipA = "127.42.0.20"
+	const ipB = "127.42.0.21"
+	t.Cleanup(func() {
+		gm.unblock(ipA)
+		gm.unblock(ipB)
+		proxy.StopProjectListeners("proj-a")
+		proxy.StopProjectListeners("proj-b")
+	})
+
+	ctx := context.Background()
+
+	bDone := make(chan error, 1)
+	go func() {
+		bDone <- proxy.StartProjectListeners(ctx, "proj-b", ipB)
+	}()
+	gm.waitUntilBlocked(ipB)
+
+	aDone := make(chan error, 1)
+	go func() {
+		aDone <- proxy.StartProjectListeners(ctx, "proj-a", ipA)
+	}()
+	gm.unblock(ipA)
+
+	select {
+	case err := <-aDone:
+		assert.NoError(t, err, "project A's StartProjectListeners")
+	case <-time.After(5 * time.Second):
+		t.Fatal("project A's StartProjectListeners did not return while project B was still blocked — " +
+			"the bind lock is serializing unrelated projects instead of being per-project")
+	}
+
+	// Confirm B really was still stuck at that point — otherwise this
+	// test would pass even with no locking at all.
+	select {
+	case <-bDone:
+		t.Fatal("project B's StartProjectListeners returned before its gate was unblocked — " +
+			"test didn't actually exercise the scenario it claims to")
+	default:
+	}
+
+	gm.unblock(ipB)
+	select {
+	case err := <-bDone:
+		assert.NoError(t, err, "project B's StartProjectListeners")
+	case <-time.After(5 * time.Second):
+		t.Fatal("project B's StartProjectListeners did not return after unblocking")
+	}
+}
+
+// TestStartProjectListeners_ConcurrentCallsBindOnce pins that two
+// simultaneous StartProjectListeners calls for the same project result
+// in exactly ONE listener pair being bound and recorded — not two,
+// with one silently orphaned. The pre-fix code released p.mu between
+// the check and the record, letting both callers proceed to bind
+// fresh FDs and spawn duplicate Accept goroutines. Only one set was
+// recorded in perProj; the other leaked (goroutines + FDs) until
+// process exit.
+func TestStartProjectListeners_ConcurrentCallsBindOnce(t *testing.T) {
+	sock, counts := startCountingMockHelper(t)
+	cfg := identity.Config{Name: "test-concurrent-start", HelperSocketPath: sock}
+
+	dir := t.TempDir()
+	ca, err := loadOrGenerateCAAt(identity.Prod, dir)
+	require.NoError(t, err)
+	proxy := NewProxyServer(cfg, NewRoutes(identity.Prod.TLD), ca)
+
+	ctx := context.Background()
+	var wg sync.WaitGroup
+	for i := 0; i < 8; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_ = proxy.StartProjectListeners(ctx, "proj-x", "127.42.0.9")
+		}()
+	}
+	wg.Wait()
+
+	assert.Equal(t, 1, counts.bindsFor("127.42.0.9:80"),
+		"concurrent StartProjectListeners must bind :80 exactly once")
+	assert.Equal(t, 1, counts.bindsFor("127.42.0.9:443"),
+		"concurrent StartProjectListeners must bind :443 exactly once")
+
+	t.Cleanup(func() { proxy.StopProjectListeners("proj-x") })
+}
+
+// TestStartGuestOriginListeners_ConcurrentCallsBindOnce is the same
+// race pinned against StartGuestOriginListeners, which binds real
+// ephemeral loopback listeners directly (no helper involved) rather
+// than going through helperClient. Each racing caller that slips past
+// the pre-fix check binds its own fresh ephemeral pair and returns its
+// own (different) port numbers before losing the record race — so
+// concurrent callers returning more than one distinct port pair is
+// the signal that more than one pair was actually bound.
+func TestStartGuestOriginListeners_ConcurrentCallsBindOnce(t *testing.T) {
+	dir := t.TempDir()
+	ca, err := loadOrGenerateCAAt(identity.Prod, dir)
+	require.NoError(t, err)
+	proxy := NewProxyServer(identity.Prod, NewRoutes(identity.Prod.TLD), ca)
+	t.Cleanup(func() { proxy.StopProjectListeners("proj-y") })
+
+	ctx := context.Background()
+	var wg sync.WaitGroup
+	var mu sync.Mutex
+	seen := make(map[string]int)
+	for i := 0; i < 8; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			httpPort, httpsPort, err := proxy.StartGuestOriginListeners(ctx, "proj-y", "127.0.0.1")
+			require.NoError(t, err)
+			mu.Lock()
+			seen[fmt.Sprintf("%d/%d", httpPort, httpsPort)]++
+			mu.Unlock()
+		}()
+	}
+	wg.Wait()
+
+	assert.Len(t, seen, 1,
+		"concurrent StartGuestOriginListeners must all observe the same bound pair, got %v", seen)
+}
+
+// TestProxyServer_DialsCfgHelperSocket_NotProdHardcoded is the C1
+// regression test: before the fix, helper.SocketPath was a
+// package-level var hardcoded to "/var/run/devm-helper.sock" and
+// StartProjectListeners always dialed it regardless of the daemon's
+// identity — an e2e daemon (or any non-Prod cfg) would dial prod's
+// helper socket (or fail outright, since prod's helper isn't installed
+// in a test/e2e sandbox). Here cfg.HelperSocketPath points at a scratch
+// UDS with an obviously non-prod Name; StartProjectListeners only
+// succeeds if ProxyServer actually threads cfg through to the helper
+// client instead of falling back to the old hardcoded path (which
+// doesn't exist in this test's sandbox).
+func TestProxyServer_DialsCfgHelperSocket_NotProdHardcoded(t *testing.T) {
+	sock := mockHelperServer(t)
+	cfg := identity.Config{Name: "test-proxy-not-prod", HelperSocketPath: sock}
+
+	dir := t.TempDir()
+	ca, err := loadOrGenerateCAAt(identity.Prod, dir)
+	require.NoError(t, err)
+
+	proxy := NewProxyServer(cfg, NewRoutes(identity.Prod.TLD), ca)
+	err = proxy.StartProjectListeners(context.Background(), "p1", "127.0.0.1")
+	require.NoError(t, err, "StartProjectListeners must dial cfg.HelperSocketPath, not a hardcoded prod path")
+	t.Cleanup(func() { proxy.StopProjectListeners("p1") })
+}
+
+// TestStartProjectListeners_NotSkippedByGuestOriginOnlyEntry pins the
+// task-5 review's Critical fix: StartProjectListeners's idempotency
+// guard used to key off mere presence of a perProj entry, but
+// StartGuestOriginListeners can populate that entry on its own —
+// StartGuestOriginListeners succeeding while a prior
+// StartProjectListeners call failed non-fatally (e.g. a transient
+// helper hiccup) leaves exactly this state. Before the fix, the next
+// StartProjectListeners call would see the entry, skip the ingress
+// bind, and never open :80/:443 for that project — silently, forever.
+// The guard must key off the ingress-specific httpSrv field instead.
+func TestStartProjectListeners_NotSkippedByGuestOriginOnlyEntry(t *testing.T) {
+	sock := mockHelperServer(t)
+	cfg := identity.Config{Name: "test-guest-only-entry", HelperSocketPath: sock}
+
+	dir := t.TempDir()
+	ca, err := loadOrGenerateCAAt(identity.Prod, dir)
+	require.NoError(t, err)
+	proxy := NewProxyServer(cfg, NewRoutes(identity.Prod.TLD), ca)
+
+	// Simulate the guest-origin-only perProj entry a prior
+	// StartGuestOriginListeners success (with StartProjectListeners
+	// never having succeeded) leaves behind.
+	setGuestOriginListenersForTest(proxy, "p1", nil, nil, &http.Server{}, &http.Server{}, 39101, 39102)
+
+	err = proxy.StartProjectListeners(context.Background(), "p1", "127.0.0.1")
+	require.NoError(t, err)
+
+	pl, ok := proxy.takeProjectListeners("p1")
+	require.True(t, ok)
+	require.NotNil(t, pl.httpSrv, "ingress HTTP must actually be bound, not skipped because of the guest-origin-only entry")
+	require.NotNil(t, pl.httpsSrv, "ingress HTTPS must actually be bound, not skipped because of the guest-origin-only entry")
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		_ = pl.httpSrv.Shutdown(ctx)
+		_ = pl.httpsSrv.Shutdown(ctx)
+	})
+}
+
+// TestStopProjectListeners_ClosesGuestListenerWithoutServer covers F10:
+// perProj stores the raw net.Listeners alongside the *http.Servers for
+// both the ingress and guest-origin pairs. When a listener is
+// recorded but no server ever was (the partial-failure shape this
+// guards against — a listener bound successfully but its *http.Server
+// goroutine never got recorded), StopProjectListeners must close the
+// raw listener directly instead of leaking its fd.
+func TestStopProjectListeners_ClosesGuestListenerWithoutServer(t *testing.T) {
+	dir := t.TempDir()
+	ca, err := loadOrGenerateCAAt(identity.Prod, dir)
+	require.NoError(t, err)
+	proxy := NewProxyServer(identity.Prod, NewRoutes(identity.Prod.TLD), ca)
+
+	httpLn, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	httpsLn, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+
+	// No *http.Server for either — simulates the fallback path.
+	setGuestOriginListenersForTest(proxy, "p1", httpLn, httpsLn, nil, nil, 0, 0)
+
+	proxy.StopProjectListeners("p1")
+
+	_, err = net.Listen("tcp", httpLn.Addr().String())
+	assert.NoError(t, err, "guest-origin HTTP listener must be closed by StopProjectListeners")
+	_, err = net.Listen("tcp", httpsLn.Addr().String())
+	assert.NoError(t, err, "guest-origin HTTPS listener must be closed by StopProjectListeners")
+}
+
+// TestStartGuestOriginListeners_IdempotentOnRetry pins the task-5
+// review's Important fix: a retried /vm/start (e.g. after a CLI
+// timeout) must not rebind a fresh guest-origin pair over a live one —
+// that would orphan the previous *http.Server goroutines and fds,
+// since nothing else ever closes a pair no longer reachable through
+// perProj.
+func TestStartGuestOriginListeners_IdempotentOnRetry(t *testing.T) {
+	dir := t.TempDir()
+	ca, err := loadOrGenerateCAAt(identity.Prod, dir)
+	require.NoError(t, err)
+	proxy := NewProxyServer(identity.Prod, NewRoutes(identity.Prod.TLD), ca)
+	t.Cleanup(func() { proxy.StopProjectListeners("p1") })
+
+	httpPort1, httpsPort1, err := proxy.StartGuestOriginListeners(context.Background(), "p1", "127.0.0.1")
+	require.NoError(t, err)
+	require.NotZero(t, httpPort1)
+	require.NotZero(t, httpsPort1)
+
+	httpPort2, httpsPort2, err := proxy.StartGuestOriginListeners(context.Background(), "p1", "127.0.0.1")
+	require.NoError(t, err)
+	assert.Equal(t, httpPort1, httpPort2, "retry must return the already-bound port, not rebind fresh")
+	assert.Equal(t, httpsPort1, httpsPort2, "retry must return the already-bound port, not rebind fresh")
+}
+
+// TestStartProjectListeners_RetriesOnHelperUnreachable proves the
+// retry wrapper (in runner.go's rebindProjectListeners) hits
+// StartProjectListeners multiple times when the helper dial fails
+// then succeeds. This is the fix for the v0.9.3 finding: after
+// daemon+helper bootout+bootstrap, the rebind goroutine could fire
+// before the helper socket was accepting connections.
+func TestRebindProjectListeners_RetriesUntilHelperReady(t *testing.T) {
+	// Start a helper only AFTER a delay so the first attempt fails
+	// and the retry succeeds.
+	dir, err := os.MkdirTemp("", "pxy-late")
+	require.NoError(t, err)
+	t.Cleanup(func() { os.RemoveAll(dir) })
+	sock := filepath.Join(dir, "helper.sock")
+	// Do not start the helper yet — first attempt should fail.
+
+	cfg := identity.Config{Name: "test-rebind-retry", HelperSocketPath: sock}
+	caDir := t.TempDir()
+	ca, err := loadOrGenerateCAAt(identity.Prod, caDir)
+	require.NoError(t, err)
+	proxy := NewProxyServer(cfg, NewRoutes(identity.Prod.TLD), ca)
+
+	// Start helper after 800ms — inside the 3-attempt window
+	// (0/500ms/1500ms) but after the first attempt.
+	go func() {
+		time.Sleep(800 * time.Millisecond)
+		// Reuse the same body as mockHelperServer but bind to our
+		// pre-chosen path.
+		startMockHelperAt(t, sock)
+	}()
+
+	status := rebindProjectListeners(context.Background(), proxy, cfg, "p1", "127.0.0.1", 0)
+	assert.Equal(t, RebindOK, status.State,
+		"expected retry to succeed; got State=%s LastError=%q", status.State, status.LastError)
+	assert.Greater(t, status.Attempts, 1,
+		"expected more than one attempt (helper unavailable at start)")
+	t.Cleanup(func() { proxy.StopProjectListeners("p1") })
+}
+
+// TestStopProjectListeners_ClearsRebindStatus proves a torn-down
+// project's rebind history doesn't leak forever in rebindStatus —
+// otherwise a later /status read could report a stale RebindOK for a
+// project that no longer exists (carried-Minor from Task 1's review).
+func TestStopProjectListeners_ClearsRebindStatus(t *testing.T) {
+	dir := t.TempDir()
+	ca, err := loadOrGenerateCAAt(identity.Prod, dir)
+	require.NoError(t, err)
+	proxy := NewProxyServer(identity.Prod, NewRoutes(identity.Prod.TLD), ca)
+
+	proxy.RecordRebindStatus("p1", RebindStatus{State: RebindOK, Attempts: 1})
+	_, ok := proxy.RebindStatus("p1")
+	require.True(t, ok, "sanity: rebind status must be recorded before StopProjectListeners")
+
+	proxy.StopProjectListeners("p1")
+
+	_, ok = proxy.RebindStatus("p1")
+	assert.False(t, ok, "StopProjectListeners must clear the recorded rebind status")
+}
+
+// TestStopProjectListeners_ClearsRebindStatus_WithLiveListeners covers
+// the populated-perProj case the empty-perProj test above doesn't
+// reach: a project that actually bound listeners (StartProjectListeners
+// succeeded) must have both its listeners torn down AND its rebind
+// status cleared by StopProjectListeners, and a second StopProjectListeners
+// call must be a safe no-op (idempotent, no panic).
+func TestStopProjectListeners_ClearsRebindStatus_WithLiveListeners(t *testing.T) {
+	sock := mockHelperServer(t)
+	cfg := identity.Config{Name: "test-stop-clears-rebind", HelperSocketPath: sock}
+
+	dir := t.TempDir()
+	ca, err := loadOrGenerateCAAt(identity.Prod, dir)
+	require.NoError(t, err)
+	proxy := NewProxyServer(cfg, NewRoutes(identity.Prod.TLD), ca)
+
+	err = proxy.StartProjectListeners(context.Background(), "p1", "127.0.0.1")
+	require.NoError(t, err, "sanity: StartProjectListeners must succeed via the mock helper")
+
+	proxy.RecordRebindStatus("p1", RebindStatus{State: RebindOK, Attempts: 1})
+	_, ok := proxy.RebindStatus("p1")
+	require.True(t, ok, "sanity: rebind status must be recorded before StopProjectListeners")
+
+	proxy.StopProjectListeners("p1")
+
+	_, ok = proxy.RebindStatus("p1")
+	assert.False(t, ok, "StopProjectListeners must clear the recorded rebind status even when listeners existed")
+
+	_, ok = proxy.takeProjectListeners("p1")
+	assert.False(t, ok, "StopProjectListeners must have torn down the live listeners")
+
+	assert.NotPanics(t, func() { proxy.StopProjectListeners("p1") },
+		"StopProjectListeners must be idempotent-safe on an already-stopped project")
+}
+
+// TestStopProjectListeners_PreservesBindLockMutex pins that StopProjectListeners
+// does NOT delete the project's entry from bindLocks — the mutex is the
+// rendezvous that serializes Start* calls for THIS project, and dropping
+// it while a slow Start* still holds it lets the next Start* create a
+// fresh mutex, defeating the mutual exclusion that Task 1's fix put in
+// place. Concrete regression: a Stop between a rebind goroutine's slow
+// StartProjectListeners and a user's /vm/start would leave both binding
+// :80/:443 in parallel. Test asserts pointer identity so a re-added
+// delete is caught even without racing.
+func TestStopProjectListeners_PreservesBindLockMutex(t *testing.T) {
+	dir := t.TempDir()
+	ca, err := loadOrGenerateCAAt(identity.Prod, dir)
+	require.NoError(t, err)
+	proxy := NewProxyServer(identity.Prod, NewRoutes(identity.Prod.TLD), ca)
+
+	unlock := proxy.lockProjectBind("p1")
+	unlock()
+
+	proxy.bindLocksMu.Lock()
+	before := proxy.bindLocks["p1"]
+	proxy.bindLocksMu.Unlock()
+	require.NotNil(t, before, "sanity: lockProjectBind should have inserted p1's mutex")
+
+	proxy.StopProjectListeners("p1")
+
+	proxy.bindLocksMu.Lock()
+	after := proxy.bindLocks["p1"]
+	proxy.bindLocksMu.Unlock()
+	assert.Same(t, before, after,
+		"StopProjectListeners must preserve the per-project bind mutex: dropping it lets a concurrent Start* create a fresh mutex and stop excluding an in-flight Start* — the exact leak Task 1 closed")
+}
+
+func TestProxyServer_StartLANListener_BindsAndServes(t *testing.T) {
+	proxy := NewProxyServer(identity.Prod, NewRoutes(identity.Prod.TLD), nil)
+	// Ephemeral port to avoid collisions in test env.
+	port := freeTCPPort(t)
+	require.NoError(t, proxy.StartLANListener(context.Background(), port))
+	t.Cleanup(func() { proxy.StopLANListener() })
+
+	// Second call is a no-op.
+	require.NoError(t, proxy.StartLANListener(context.Background(), port))
+
+	// Actually bound?
+	conn, err := net.DialTimeout("tcp", fmt.Sprintf("127.0.0.1:%d", port), 500*time.Millisecond)
+	require.NoError(t, err, "LAN listener should be reachable")
+	conn.Close()
+}
+
+func TestProxyServer_StopLANListener_ReleasesPort(t *testing.T) {
+	proxy := NewProxyServer(identity.Prod, NewRoutes(identity.Prod.TLD), nil)
+	port := freeTCPPort(t)
+	require.NoError(t, proxy.StartLANListener(context.Background(), port))
+	proxy.StopLANListener()
+
+	// After Stop the port should be reusable — but on Linux the closed
+	// socket lingers briefly in TIME_WAIT. Retry the rebind for up to
+	// a couple seconds. macOS releases immediately; Linux takes ~1s
+	// under the CI runner's TCP stack. Failing this assertion after
+	// the retry window means Stop genuinely leaked the listener.
+	deadline := time.Now().Add(3 * time.Second)
+	var lastErr error
+	for time.Now().Before(deadline) {
+		ln, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", port))
+		if err == nil {
+			ln.Close()
+			return
+		}
+		lastErr = err
+		time.Sleep(100 * time.Millisecond)
+	}
+	t.Fatalf("port %d not released after Stop within 3s: %v", port, lastErr)
+}
+
+func TestProxyServer_ServeLAN_ReturnsNoRouteFor502(t *testing.T) {
+	routes := NewRoutes(identity.Prod.TLD)
+	proxy := NewProxyServer(identity.Prod, routes, nil)
+	port := freeTCPPort(t)
+	require.NoError(t, proxy.StartLANListener(context.Background(), port))
+	t.Cleanup(func() { proxy.StopLANListener() })
+
+	resp, err := http.Get(fmt.Sprintf("http://127.0.0.1:%d/", port))
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	assert.Equal(t, http.StatusBadGateway, resp.StatusCode)
+}
+
+func freeTCPPort(t *testing.T) int {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	port := ln.Addr().(*net.TCPAddr).Port
+	ln.Close()
+	return port
+}
+
+// captureStdlibLog redirects the stdlib default logger (which the
+// daemon proxy uses via log.Printf) into a buffer for the duration
+// of a test. Returns the buffer.
+func captureStdlibLog(t *testing.T) *bytes.Buffer {
+	t.Helper()
+	var buf bytes.Buffer
+	prev := log.Writer()
+	log.SetOutput(&buf)
+	t.Cleanup(func() { log.SetOutput(prev) })
+	return &buf
+}
+
+// TestProxy_ServeHTTP_LogsEveryOutcome pins per-branch logging in
+// ServeHTTP. Silent RSTs and 502-no-route mysteries have wasted enough
+// diagnostic time already — every code path must leave a breadcrumb.
+func TestProxy_ServeHTTP_LogsEveryOutcome(t *testing.T) {
+	dir := t.TempDir()
+	ca, err := loadOrGenerateCAAt(identity.Prod, dir)
+	require.NoError(t, err)
+
+	t.Run("no-local-addr", func(t *testing.T) {
+		routes := NewRoutes(identity.Prod.TLD)
+		proxy := NewProxyServer(identity.Prod, routes, ca)
+		buf := captureStdlibLog(t)
+
+		req := httptest.NewRequest(http.MethodGet, "http://a.test/foo", nil)
+		req.Host = "a.test"
+		proxy.ServeHTTP(httptest.NewRecorder(), req)
+
+		got := buf.String()
+		assert.Contains(t, got, "no-local-addr")
+		assert.Contains(t, got, "host=a.test")
+		assert.Contains(t, got, "path=/foo")
+	})
+
+	t.Run("no-project", func(t *testing.T) {
+		routes := NewRoutes(identity.Prod.TLD)
+		proxy := NewProxyServer(identity.Prod, routes, ca)
+		buf := captureStdlibLog(t)
+
+		req := httptest.NewRequest(http.MethodGet, "http://a.test/", nil)
+		req.Host = "a.test"
+		req = withLocalAddr(req, "127.42.0.98")
+		proxy.ServeHTTP(httptest.NewRecorder(), req)
+
+		got := buf.String()
+		assert.Contains(t, got, "no-project")
+		assert.Contains(t, got, "ip=127.42.0.98")
+		assert.Contains(t, got, "host=a.test")
+	})
+
+	t.Run("no-route", func(t *testing.T) {
+		routes := NewRoutes(identity.Prod.TLD)
+		registerProject(t, "px", "127.42.0.97")
+		proxy := NewProxyServer(identity.Prod, routes, ca)
+		buf := captureStdlibLog(t)
+
+		req := httptest.NewRequest(http.MethodGet, "http://unknown.test/x", nil)
+		req.Host = "unknown.test"
+		req = withLocalAddr(req, "127.42.0.97")
+		proxy.ServeHTTP(httptest.NewRecorder(), req)
+
+		got := buf.String()
+		assert.Contains(t, got, "no-route")
+		assert.Contains(t, got, "project=px")
+		assert.Contains(t, got, "host=unknown.test")
+		assert.Contains(t, got, "path=/x")
+	})
+
+	t.Run("dispatched", func(t *testing.T) {
+		backPort, cleanup := startBackend(t, "ok")
+		defer cleanup()
+		routes := NewRoutes(identity.Prod.TLD)
+		require.NoError(t, routes.Apply("py", []Route{
+			{Hostname: "a.test", BackendPort: backPort, Mode: ModeLocal, Project: "py"},
+		}))
+		registerProject(t, "py", "127.42.0.96")
+		proxy := NewProxyServer(identity.Prod, routes, ca)
+		buf := captureStdlibLog(t)
+
+		req := httptest.NewRequest(http.MethodGet, "http://a.test/hello", nil)
+		req.Host = "a.test"
+		req = withLocalAddr(req, "127.42.0.96")
+		proxy.ServeHTTP(httptest.NewRecorder(), req)
+
+		got := buf.String()
+		assert.Contains(t, got, "py")
+		assert.Contains(t, got, "a.test/hello")
+		assert.Contains(t, got, fmt.Sprintf(":%d", backPort))
+	})
+
+	t.Run("backend-down", func(t *testing.T) {
+		routes := NewRoutes(identity.Prod.TLD)
+		require.NoError(t, routes.Apply("pz", []Route{
+			{Hostname: "down.test", BackendPort: 59991, Mode: ModeVM, Project: "pz"},
+		}))
+		registerProject(t, "pz", "127.42.0.95")
+		proxy := NewProxyServer(identity.Prod, routes, ca)
+		buf := captureStdlibLog(t)
+
+		req := httptest.NewRequest(http.MethodGet, "http://down.test/", nil)
+		req.Host = "down.test"
+		req = withLocalAddr(req, "127.42.0.95")
+		proxy.ServeHTTP(httptest.NewRecorder(), req)
+
+		got := buf.String()
+		assert.Contains(t, got, "backend-down")
+		assert.Contains(t, got, "host=down.test")
+		assert.Contains(t, got, ":59991")
+	})
+}
+
+// TestNewProxyErrorLog_WritesToConfiguredSink pins that the ErrorLog
+// wired onto http.Server routes its output to proxyErrorLogOut (which
+// production sets to os.Stderr), tagged with the scope string. This
+// is the seam that catches panic-serving traces and TLS handshake
+// errors — without it those messages go through the stdlib default
+// logger to stdout, buried in the info stream.
+func TestNewProxyErrorLog_WritesToConfiguredSink(t *testing.T) {
+	prev := proxyErrorLogOut
+	r, w, err := os.Pipe()
+	require.NoError(t, err)
+	proxyErrorLogOut = w
+	t.Cleanup(func() {
+		proxyErrorLogOut = prev
+		_ = r.Close()
+		_ = w.Close()
+	})
+
+	lg := newProxyErrorLog("http everstone")
+	lg.Println("simulated panic-serving trace")
+	_ = w.Close()
+	got, _ := io.ReadAll(r)
+
+	assert.Contains(t, string(got), "serviceapi: proxy(http everstone):")
+	assert.Contains(t, string(got), "simulated panic-serving trace")
+}
+

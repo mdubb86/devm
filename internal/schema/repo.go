@@ -1,0 +1,148 @@
+package schema
+
+import (
+	"fmt"
+	"path/filepath"
+
+	"github.com/mdubb86/devm/internal/scriptfile"
+	"gopkg.in/yaml.v3"
+)
+
+// RepoConfig declares a git repo to hydrate a volume from at cold-start.
+// Used at top level (Config.Repos, keyed by repo name).
+type RepoConfig struct {
+	// URL is the git clone URL. Nil at top level means "derive from
+	// `git remote get-url origin` in Mac cwd." Nil for a secondary is
+	// a validation error (secondaries must declare URL explicitly).
+	URL *string `yaml:"url,omitempty"`
+
+	// Secret names an entry in the devm secret store. Iron-proxy
+	// substitutes __DEVM_SECRET_<name>__ in the Authorization header
+	// at clone time. Required at top level. Optional per-volume
+	// (inherits from top-level).
+	Secret string `yaml:"secret,omitempty"`
+
+	// Label names the mutagen sync session for this repo.
+	Label *string `yaml:"label,omitempty"`
+
+	// Volume, when true, backs this repo with a devm-managed volume
+	// instead of a plain bind mount.
+	Volume *bool `yaml:"volume,omitempty"`
+
+	// Primary marks this repo as the project's primary workspace.
+	Primary *bool `yaml:"primary,omitempty"`
+
+	// Ignore lists mutagen sync ignore patterns.
+	Ignore []string `yaml:"ignore,omitempty"`
+
+	// Commands lists the devm.sh/devm.me.sh function names runnable
+	// against this repo via `run <name>`.
+	Commands []string `yaml:"commands,omitempty"`
+}
+
+var repoKnownFields = []string{"url", "secret", "label", "volume", "primary", "ignore", "commands"}
+
+// Volume is a per-project persistent store.
+type Volume struct {
+	// Path is the absolute guest mount point. Required.
+	Path string
+	// Label names the mutagen sync session for this volume.
+	Label *string
+	// Ignore lists mutagen sync ignore patterns.
+	Ignore []string
+}
+
+var volumeKnownFields = []string{"path", "label", "ignore"}
+
+// ResolveLabel returns the mutagen sync label for a volumes.<name>
+// entry: an explicit `label:` wins; else the leaf dir of Path, run
+// through SanitizeDerivedLabel so dotfile-rooted paths like
+// /home/devm/.claude produce a usable default ("claude", not
+// ".claude" — which mutagen rejects and which would also point the
+// Mac-side mirror at a hidden dir the operator can't see).
+//
+// Single source of truth for volume-label derivation: schema
+// validation, mutagen session setup, and live reconcile all call
+// this method. A second copy of the logic drifted between the
+// serviceapi and reconcile packages in v0.23.3 and shipped a
+// mis-mirrored .codex volume before erroring — this method exists
+// so that failure mode can't recur.
+func (v Volume) ResolveLabel() string {
+	if v.Label != nil {
+		return *v.Label
+	}
+	return SanitizeDerivedLabel(filepath.Base(v.Path))
+}
+
+// UnmarshalYAML decodes either the scalar shape (bare guest path) or the
+// mapping shape (`{path: ..., label: ..., ignore: ...}`). Rejects unknown
+// keys in the mapping shape.
+func (v *Volume) UnmarshalYAML(node *yaml.Node) error {
+	if node.Kind == yaml.ScalarNode {
+		v.Path = node.Value
+		return nil
+	}
+	if node.Kind != yaml.MappingNode {
+		return fmt.Errorf("volume must be a string (guest path) or a mapping (line %d)", node.Line)
+	}
+	if err := rejectUnknownYAMLKeys(node, "volume", volumeKnownFields); err != nil {
+		return err
+	}
+	type raw struct {
+		Path   string   `yaml:"path"`
+		Label  *string  `yaml:"label,omitempty"`
+		Ignore []string `yaml:"ignore,omitempty"`
+	}
+	var r raw
+	if err := node.Decode(&r); err != nil {
+		return err
+	}
+	v.Path = r.Path
+	v.Label = r.Label
+	v.Ignore = r.Ignore
+	return nil
+}
+
+// UnmarshalYAML on RepoConfig enforces unknown-key rejection.
+func (r *RepoConfig) UnmarshalYAML(node *yaml.Node) error {
+	if node.Kind != yaml.MappingNode {
+		return fmt.Errorf("repo must be a mapping (line %d)", node.Line)
+	}
+	if err := rejectUnknownYAMLKeys(node, "repo", repoKnownFields); err != nil {
+		return err
+	}
+	type raw struct {
+		URL      *string  `yaml:"url,omitempty"`
+		Secret   string   `yaml:"secret,omitempty"`
+		Label    *string  `yaml:"label,omitempty"`
+		Volume   *bool    `yaml:"volume,omitempty"`
+		Primary  *bool    `yaml:"primary,omitempty"`
+		Ignore   []string `yaml:"ignore,omitempty"`
+		Commands []string `yaml:"commands,omitempty"`
+	}
+	var raw2 raw
+	if err := node.Decode(&raw2); err != nil {
+		return err
+	}
+	r.URL = raw2.URL
+	r.Secret = raw2.Secret
+	r.Label = raw2.Label
+	r.Volume = raw2.Volume
+	r.Primary = raw2.Primary
+	r.Ignore = raw2.Ignore
+	r.Commands = raw2.Commands
+	return nil
+}
+
+// validateCommands checks every entry in r.Commands matches
+// scriptfile.FunctionNameRE. Iteration is over the list as declared —
+// order in the YAML is preserved and any error names the offending
+// entry directly.
+func (r RepoConfig) validateCommands() error {
+	for _, name := range r.Commands {
+		if err := scriptfile.ValidateFunctionName(name); err != nil {
+			return fmt.Errorf("command %q: %w", name, err)
+		}
+	}
+	return nil
+}

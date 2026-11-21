@@ -1,0 +1,57 @@
+"""31: an install: step with a failing pipeline fails loud (pipefail in user shell).
+
+Before this work, user install commands ran under `sh -c "<cmd>"`. On
+the docker-templates:shell-docker base image (Ubuntu), `/bin/sh` is dash
+and dash doesn't support `set -o pipefail`. That meant a recipe like
+`curl https://x | bash` would silently report success if curl 404'd
+(curl fails, bash gets no input, exits 0, pipeline exits 0, wrapper
+records 0).
+
+The fix in internal/provision/provision.go runs user install commands under
+`bash -o pipefail -c "<cmd>"` so a non-zero exit anywhere in the
+pipeline propagates as the pipeline's rc. This test pins that.
+"""
+import subprocess
+
+import pytest
+
+pytestmark = pytest.mark.devm
+
+
+@pytest.mark.timeout(120)
+def test_install_pipeline_failure_fails_loud(workspace, devm):
+    # `false | cat` exits 0 without pipefail (cat's rc), non-zero WITH
+    # pipefail (false's rc propagates). This is the canonical test for
+    # pipefail being active.
+    workspace.write_devmyaml()
+    workspace.write_devm_sh(
+        "#!/usr/bin/env bash\n"
+        "set -eo pipefail\n"
+        "install() {\n"
+        "  false | cat\n"
+        "}\n"
+    )
+
+    proc = subprocess.run(
+        [devm.path, "start"],
+        cwd=str(workspace.path),
+        capture_output=True, timeout=90,
+    )
+    assert proc.returncode != 0, (
+        f"devm start should exit non-zero on `false | cat` install step "
+        f"(pipefail must be active in the user shell); got rc=0\n"
+        f"stdout={proc.stdout.decode()!r}\nstderr={proc.stderr.decode()!r}"
+    )
+    err = proc.stderr.decode()
+    # The composed script names the failing STAGE (not the individual
+    # command — the old per-step provisioner's per-command echo is gone).
+    assert 'provision stage "install"' in err, (
+        f"expected 'provision stage \"install\"' in stderr; got:\n{err}"
+    )
+    # ...and surfaces the exit detail the composed script DOES report on a
+    # stage failure: the script's own exit code (StepFailure's wrapped err),
+    # proving `false | cat` propagated its failure through pipefail rather
+    # than being swallowed by cat's exit 0.
+    assert "provisioning script exited" in err, (
+        f"expected 'provisioning script exited' detail in stderr; got:\n{err}"
+    )

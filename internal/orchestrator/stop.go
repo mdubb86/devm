@@ -1,0 +1,271 @@
+package orchestrator
+
+import (
+	"context"
+	"fmt"
+	"io"
+	"log"
+	"os"
+	"path/filepath"
+	"strings"
+
+	"github.com/mdubb86/devm/internal/identity"
+	"github.com/mdubb86/devm/internal/mutagen"
+	"github.com/mdubb86/devm/internal/sandbox/tart"
+	"github.com/mdubb86/devm/internal/schema"
+	"github.com/mdubb86/devm/internal/serviceapi"
+	"github.com/mdubb86/devm/internal/serviceapi/sshkeys"
+	"github.com/mdubb86/devm/internal/snapshot"
+)
+
+// vmPresentInList asks `tart list` whether name is still registered,
+// used by RunStop to cross-check tart's "does not exist" delete
+// error. A field report caught the delete branch firing against a
+// VM that `tart list` still showed as present and running; without
+// this cross-check we'd report "already absent" to the operator and
+// leave the VM in place. Returns (present, err): err non-nil means
+// we couldn't determine the state (list failed), present=true means
+// the VM is still registered under this name.
+var vmPresentInList = func(ctx context.Context, tr *tart.Tart, name string) (bool, error) {
+	vms, err := tr.List(ctx)
+	if err != nil {
+		return false, err
+	}
+	for _, vm := range vms {
+		if vm.Name == name {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+// Destructiveness selects between preserving the VM (stop) and
+// destroying it (teardown).
+type Destructiveness int
+
+const (
+	// StopPreserve stops the VM via the daemon supervisor but keeps
+	// the VM disk intact.
+	StopPreserve Destructiveness = iota
+	// StopDestroy stops the VM and deletes its disk image entirely.
+	StopDestroy
+)
+
+// StopVMClient is the subset of *serviceapi.Client this orchestrator
+// uses. Defined here to allow test fakes; the real client satisfies it.
+// SnapshotCreate is on this interface because the lifecycle-snapshot
+// block in RunStop runs before the VM is torn down.
+type StopVMClient interface {
+	StopVM(ctx context.Context, name string, destroy bool) error
+	SnapshotCreate(ctx context.Context, project, entry string, source snapshot.Source) (snapshot.Meta, error)
+}
+
+// StopDeps wires collaborators for RunStop. Out sinks the human-
+// readable progress lines RunStop emits; tests inject bytes.Buffer.
+// When Out is nil, os.Stderr is used.
+type StopDeps struct {
+	Tart             *tart.Tart
+	ServiceAPIClient StopVMClient
+	Out              io.Writer
+	// Ident is the daemon identity (prod vs. e2e) this stop/teardown
+	// operates under — threaded into the state-snapshot/sshkeys/
+	// ssh_config calls RunStop makes, instead of a hardcoded
+	// identity.Prod.
+	Ident identity.Config
+	// Cfg is the current project config. Drives the on_stop /
+	// on_teardown lifecycle snapshots that run before the VM shuts
+	// down. Zero value means no snapshots declared, which is the
+	// common case for projects not using the feature.
+	Cfg schema.Config
+	// SkipSnapshot bypasses the lifecycle snapshot block entirely.
+	// Wired to `--skip-snapshot` on `devm stop` / `devm teardown` — the
+	// escape hatch for a stop that must proceed even when the project
+	// opted into on_stop/on_teardown captures.
+	SkipSnapshot bool
+}
+
+// RunStop implements both `devm stop` (mode=StopPreserve) and
+// `devm teardown` (mode=StopDestroy). Return code: 0 on success.
+//
+// name is both the daemon admin StopVM key and the Tart VM name used
+// for disk deletion on teardown.
+//
+// The caller is responsible for any interactive confirmation before
+// invoking RunStop; this function always proceeds unconditionally.
+func RunStop(ctx context.Context, d StopDeps, name string, mode Destructiveness) (int, error) {
+	if d.Out == nil {
+		d.Out = os.Stderr
+	}
+
+	// Lifecycle snapshots run while the VM is still up — a backup hook
+	// that needs a live guest process (e.g. pg_dumpall) can't run once
+	// StopVM has flushed+powered the guest off. Any failure aborts the
+	// stop: destroying guest state after a failed capture would strand
+	// unsaved writes with no path back.
+	//
+	// Failure is reported on d.Out (same channel as every other RunStop
+	// status line) and the error is swallowed before returning. Cobra
+	// prints a returned error with an `Error:` prefix on top of any
+	// progress output, which would double-print this message; the
+	// non-zero rc alone carries the exit code up.
+	if !d.SkipSnapshot && d.Cfg.Snapshots.Len() > 0 {
+		source := snapshot.SourceOnStop
+		if mode == StopDestroy {
+			source = snapshot.SourceOnTeardown
+		}
+		if err := runLifecycleSnapshots(ctx, d, name, source); err != nil {
+			fmt.Fprintln(d.Out, err.Error())
+			return 1, nil
+		}
+	}
+
+	// Ask the daemon supervisor to stop the VM. Best-effort: continue
+	// silently on failure so teardown can still delete the disk.
+	// Common case: daemon is down, or the VM was never supervised by
+	// THIS daemon process. Either way, the user's intent ("stop and
+	// destroy") is still achievable via tart.Delete below.
+	//
+	// name is forwarded so the daemon can `tart stop <name>` first for a
+	// graceful guest shutdown before SIGTERM'ing the tart-run process —
+	// otherwise in-flight guest writes aren't flushed and files from just
+	// before stop are lost (Bug J).
+	//
+	// destroy mirrors mode: StopDestroy tells the daemon to purge this
+	// project's egress policy state and denial counts along with the
+	// VM, so a future project reusing the name starts clean; StopPreserve
+	// keeps them for the next start.
+	_ = d.ServiceAPIClient.StopVM(ctx, name, mode == StopDestroy)
+
+	if err := EmitSSHConfig(ctx, d.Ident, d.Tart); err != nil {
+		log.Printf("ssh_config emit failed after stop: %v", err)
+	}
+
+	if mode == StopDestroy {
+		// Terminate this project's mutagen sessions before the VM disk
+		// is deleted. Termination is a mutagen-daemon-local operation
+		// (no guest sshd needed), but runs before Delete for ordering
+		// consistency with the flush+pause /vm/stop just issued.
+		// Best-effort: a failure leaves the sessions dangling in the
+		// mutagen daemon's state, cleaned up on its next restart.
+		if err := mutagenTeardownFn(d, name); err != nil {
+			log.Printf("mutagen teardown phase for %s: %v (continuing)", name, err)
+		}
+
+		if err := d.Tart.Delete(ctx, name); err != nil {
+			// "VM does not exist" is the desired end state. tart's
+			// stderr for absent VMs is stable: "the specified VM
+			// \"<name>\" does not exist".
+			//
+			// Cross-check with `tart list` before swallowing: a
+			// field report caught the "does not exist" branch
+			// firing against a VM that `tart list` still showed as
+			// present and running, which convinced the operator
+			// they were on a clean slate when they weren't. If list
+			// disagrees with delete, surface the discrepancy as a
+			// real failure instead of pretending the VM is gone.
+			if !strings.Contains(err.Error(), "does not exist") {
+				return -1, fmt.Errorf("tart delete %s: %w", name, err)
+			}
+			present, listErr := vmPresentInList(ctx, d.Tart, name)
+			if listErr == nil && present {
+				return -1, fmt.Errorf("tart delete %s said %q but `tart list` still shows this VM — refusing to pretend it's gone", name, err.Error())
+			}
+			if listErr != nil {
+				fmt.Fprintf(d.Out, "VM %s already absent (list verify failed: %v).\n", name, listErr)
+			} else {
+				fmt.Fprintf(d.Out, "VM %s already absent.\n", name)
+			}
+		} else {
+			fmt.Fprintf(d.Out, "Deleted VM %s.\n", name)
+		}
+
+		// Remove the daemon's last-applied-cfg snapshot now that the VM
+		// is gone. Without this, a recreated project with the same
+		// name inherits a stale baseline and reconcile diffs
+		// against the OLD vm's config instead of treating everything as
+		// new. Best-effort: log but don't fail the teardown over it —
+		// a stray snapshot only affects the first reconcile after
+		// recreation (degrades to the same "full diff" fallback used
+		// when no snapshot exists at all).
+		if err := serviceapi.RemoveStateCfg(d.Ident, name); err != nil {
+			fmt.Fprintf(d.Out, "warning: remove state snapshot for %s: %v\n", name, err)
+		}
+
+		// Remove the per-project SSH key material. Without this, a
+		// recreated project with the same name inherits stale
+		// SSH keys. Best-effort: log but continue — leaked SSH material
+		// is inert without a matching authorized_keys in a fresh VM.
+		if err := sshkeys.Remove(d.Ident, name); err != nil {
+			log.Printf("sshkeys.Remove(%s): %v", name, err)
+		}
+
+		// Reap orchestration strays that outlive tart's own delete.
+		// Runs on both the "Deleted" and "already absent" branches:
+		// belt-and-suspenders when tart cleaned up cleanly, actual fix
+		// when tart's registry and disk diverged (a v0.10.0-created
+		// VM whose config newer tart can't parse — `tart delete`
+		// reports "does not exist" while ~/.tart/vms/<name>/ still
+		// holds the disk).
+		reapPerProjectArtifacts(d.Out, d.Ident, name)
+	} else {
+		fmt.Fprintf(d.Out, "Stopped VM %s. Disk preserved.\n", name)
+	}
+
+	return 0, nil
+}
+
+// mutagenTeardownFn is the test-injection seam for the mutagen
+// session-termination step RunStop runs (on StopDestroy) before the
+// VM disk delete. Production always terminates the project's real
+// mutagen sessions; tests substitute a fake to verify sequencing
+// without a live mutagen daemon.
+var mutagenTeardownFn = func(d StopDeps, name string) error {
+	mutagenBin, err := mutagen.Ensure(d.Ident.RuntimeDir())
+	if err != nil {
+		return fmt.Errorf("mutagen: extract binary: %w", err)
+	}
+	return serviceapi.TeardownPhase(serviceapi.NewMutagenCLI(d.Ident, mutagenBin, mutagen.OSExec), name)
+}
+
+// reapPerProjectArtifacts removes the three orchestration files
+// devm owns per-project that outlive tart's own delete: the tart VM
+// disk dir (in case tart's registry disagreed with its filesystem),
+// the iron-proxy config, and the softnet control socket. Each is
+// best-effort — a missing file is not an error; a permission-denied
+// (or anything else) is logged as a warning line on stdout but does
+// not fail the teardown, which has already accomplished the user's
+// main intent of getting the VM out of the way.
+//
+// Never touches user data: volumes, secrets, workspace files, and
+// log files stay in place. Volume preservation across teardown is a
+// documented feature; `devm purge` reaps abandoned volume dirs on a
+// separate cadence.
+func reapPerProjectArtifacts(out io.Writer, cfg identity.Config, name string) {
+	for _, art := range perProjectArtifactPaths(cfg, name) {
+		removeArtifact(out, art)
+	}
+}
+
+// perProjectArtifactPaths lists the on-disk paths reapPerProjectArtifacts
+// tries to remove. Kept factored so tests can pin the exact set without
+// re-implementing the path derivation.
+func perProjectArtifactPaths(cfg identity.Config, name string) []string {
+	paths := []string{
+		filepath.Join(cfg.RuntimeDir(), "iron-proxy", name+".yaml"),
+		serviceapi.SoftnetControlSock(cfg, name),
+	}
+	if home, err := os.UserHomeDir(); err == nil {
+		paths = append(paths, filepath.Join(home, ".tart", "vms", name))
+	}
+	return paths
+}
+
+// removeArtifact removes one path. RemoveAll handles both files and
+// directories, and returns nil for a missing path — the common no-op
+// case when tart cleaned up itself.
+func removeArtifact(out io.Writer, path string) {
+	if err := os.RemoveAll(path); err != nil {
+		fmt.Fprintf(out, "warning: remove %s: %v\n", path, err)
+	}
+}
+

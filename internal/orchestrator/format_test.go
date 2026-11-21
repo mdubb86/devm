@@ -1,0 +1,1209 @@
+package orchestrator
+
+import (
+	"encoding/json"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/mdubb86/devm/internal/identity"
+	"github.com/mdubb86/devm/internal/reconcile"
+	"github.com/mdubb86/devm/internal/schema"
+	"github.com/mdubb86/devm/internal/serviceapi"
+	"github.com/mdubb86/devm/internal/snapshot"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+)
+
+// writeTouchFile creates an empty file at path. Tests use it to stand
+// up <ts>.zst placeholders so snapshot.UpdateLatest's existence check
+// for the archive succeeds.
+func writeTouchFile(path string) error {
+	return os.WriteFile(path, []byte("x"), 0o644)
+}
+
+func TestFormatStatusText_RunningInSync(t *testing.T) {
+	out := FormatStatusText(StatusResult{HasProject: true,
+		Sandbox: "x", State: "running",
+		Sessions:    []Session{{PID: 27, Comm: "bash", TTY: "pts/1", User: "agent"}},
+		PendingLive: 0, PendingRecreate: 0,
+	})
+	assert.Contains(t, out, "Sandbox: x")
+	assert.Contains(t, out, "State:   running")
+	assert.Contains(t, out, "pts/1: bash (PID 27, owner agent)")
+	assert.Contains(t, out, "In sync.")
+}
+
+func TestFormatStatusText_RunningWithPending(t *testing.T) {
+	out := FormatStatusText(StatusResult{HasProject: true,
+		Sandbox: "x", State: "running",
+		PendingLive: 2, PendingRecreate: 1,
+	})
+	assert.Contains(t, out, "Pending changes: 2 live, 1 require recreate")
+	assert.Contains(t, out, "Run `devm reconcile` to apply.")
+}
+
+func TestFormatStatusText_Stopped(t *testing.T) {
+	out := FormatStatusText(StatusResult{HasProject: true, Sandbox: "x", State: "stopped"})
+	assert.Contains(t, out, "Sandbox stopped; config changes will apply on next `devm start`.")
+	assert.NotContains(t, out, "Active sessions")
+}
+
+// TestDevmStatus_PrintsSnapshotWarningsProminently pins that
+// FormatStatusText emits the "Snapshot warnings:" block with the
+// per-orphan remediation line whenever StatusResult.SnapshotWarnings is
+// non-empty. The whole point of this plumbing is to keep the operator
+// from missing an orphan reported by `/vm/reconcile`.
+func TestDevmStatus_PrintsSnapshotWarningsProminently(t *testing.T) {
+	warn := `snapshot "pg" orphaned (no yaml entry); run 'devm snapshot clear pg' or re-add to yaml`
+	out := FormatStatusText(StatusResult{
+		HasProject:       true,
+		Sandbox:          "x",
+		State:            "running",
+		SnapshotWarnings: []string{warn},
+	})
+	assert.Contains(t, out, "Snapshot warnings:")
+	assert.Contains(t, out, `snapshot "pg" orphaned`)
+	assert.Contains(t, out, "devm snapshot clear pg")
+}
+
+// TestFormatStatusText_NoSnapshotWarnings pins that the warnings block
+// vanishes entirely when there's nothing to warn about — no empty header
+// for projects that have never orphaned a snapshot.
+func TestFormatStatusText_NoSnapshotWarnings(t *testing.T) {
+	out := FormatStatusText(StatusResult{
+		HasProject: true,
+		Sandbox:    "x",
+		State:      "running",
+	})
+	assert.NotContains(t, out, "Snapshot warnings:")
+}
+
+func TestFormatReconcileText_LiveOnly(t *testing.T) {
+	out := FormatReconcileText(ReconcileResult{
+		Applied: []reconcile.Change{{Kind: reconcile.KindPortAdd, Service: "api", Key: "8080", New: "8080"}},
+	})
+	assert.Contains(t, out, "Applied 1 live change")
+	assert.Contains(t, out, "+ port 8080 (api)")
+}
+
+func TestFormatReconcileText_RecreatePending(t *testing.T) {
+	out := FormatReconcileText(ReconcileResult{
+		Applied: []reconcile.Change{{Kind: reconcile.KindPortAdd, Service: "api", Key: "8080", New: "8080"}},
+		RecreateRequired: []reconcile.Change{
+			{Kind: reconcile.KindImageChange},
+		},
+		Flavor:   reconcile.FlavorTeardownVM,
+		Sessions: []Session{{PID: 27, Comm: "bash", TTY: "pts/1", User: "agent"}},
+	})
+	assert.Contains(t, out, "Applied 1 live change")
+	assert.Contains(t, out, "1 change(s) require recreate")
+	assert.Contains(t, out, "~ base image")
+	assert.Contains(t, out, "Teardown + recreate sandbox?")
+	assert.Contains(t, out, "Will hang up 1 active session")
+	assert.NotContains(t, out, "require restart")
+}
+
+func TestFormatReconcileText_RestartPending(t *testing.T) {
+	// KindMemoryChange is BucketRestartVM — distinct "restart" category,
+	// not folded into the "recreate" (teardown) section.
+	out := FormatReconcileText(ReconcileResult{
+		RecreateRequired: []reconcile.Change{
+			{Kind: reconcile.KindMemoryChange, Old: "4G", New: "8G"},
+		},
+		Flavor:   reconcile.FlavorRestartVM,
+		Sessions: []Session{{PID: 27, Comm: "bash", TTY: "pts/1", User: "agent"}},
+	})
+	assert.Contains(t, out, "1 change(s) require restart")
+	assert.Contains(t, out, "~ memory: 4G → 8G")
+	assert.Contains(t, out, "Restart sandbox (`devm stop` + `devm start`) to apply")
+	assert.Contains(t, out, "Will hang up 1 active session")
+	assert.NotContains(t, out, "require recreate")
+	assert.NotContains(t, out, "Teardown")
+}
+
+func TestFormatReconcileText_RestartAndRecreatePending_BothSectionsRender(t *testing.T) {
+	out := FormatReconcileText(ReconcileResult{
+		RecreateRequired: []reconcile.Change{
+			{Kind: reconcile.KindMemoryChange, Old: "4G", New: "8G"},
+			{Kind: reconcile.KindImageChange},
+		},
+		Flavor: reconcile.FlavorTeardownVM,
+	})
+	assert.Contains(t, out, "1 change(s) require restart")
+	assert.Contains(t, out, "~ memory: 4G → 8G")
+	assert.Contains(t, out, "1 change(s) require recreate")
+	assert.Contains(t, out, "~ base image")
+}
+
+func TestFormatReconcileText_RestartAndRecreatePending_HangupPrintedOnce(t *testing.T) {
+	out := FormatReconcileText(ReconcileResult{
+		RecreateRequired: []reconcile.Change{
+			{Kind: reconcile.KindMemoryChange, Old: "4G", New: "8G"},
+			{Kind: reconcile.KindImageChange},
+		},
+		Flavor:   reconcile.FlavorTeardownVM,
+		Sessions: []Session{{PID: 27, Comm: "bash", TTY: "pts/1", User: "agent"}},
+	})
+	assert.Equal(t, 1, strings.Count(out, "Will hang up 1 active session"),
+		"the restart and recreate sections both cover the same pending sessions — warn once, not per section")
+}
+
+func TestFormatReconcileText_IronProxyRestartAppliedNormalPath(t *testing.T) {
+	r := ReconcileResult{
+		AppliedIronProxy: []reconcile.Change{
+			{Kind: reconcile.KindNetworkAdd, Key: "api.cloudflare.com", New: "api.cloudflare.com"},
+			{Kind: reconcile.KindSecretAdd, Key: "CLOUDFLARE_TOKEN"},
+		},
+	}
+	out := FormatReconcileText(r)
+	assert.Contains(t, out, "Applied 2 network egress change")
+	assert.Contains(t, out, "network.allow: api.cloudflare.com")
+	assert.Contains(t, out, "secret: CLOUDFLARE_TOKEN")
+	// No revive line when Revived is false (default).
+	assert.NotContains(t, out, "was not running")
+}
+
+func TestFormatReconcileText_IronProxyRestartVMOff(t *testing.T) {
+	r := ReconcileResult{
+		SandboxState: "stopped",
+		AppliedIronProxy: []reconcile.Change{
+			{Kind: reconcile.KindNetworkAdd, Key: "api.example.com", New: "api.example.com"},
+		},
+	}
+	out := FormatReconcileText(r)
+	assert.Contains(t, out, "Recorded 1 network egress change")
+	assert.NotContains(t, out, "Applied")
+}
+
+func TestFormatReconcileText_IronProxyRestartRevived(t *testing.T) {
+	r := ReconcileResult{
+		AppliedIronProxy: []reconcile.Change{
+			{Kind: reconcile.KindNetworkAdd, Key: "x.com", New: "x.com"},
+		},
+		IronProxyRevived: true,
+		Sandbox:          "myproj",
+	}
+	out := FormatReconcileText(r)
+	assert.Contains(t, out, "iron-proxy for myproj was not running — respawned")
+}
+
+func TestFormatStatusJSON(t *testing.T) {
+	js := FormatStatusJSON(StatusResult{HasProject: true,
+		Sandbox: "x", State: "running",
+		Sessions:    []Session{{PID: 27, Comm: "bash", TTY: "pts/1", User: "agent"}},
+		PendingLive: 2, PendingRecreate: 1,
+		ProxyHealth: &serviceapi.ProxyHealth{Status: serviceapi.ProxyStale, NeedsSecrets: true},
+	})
+	var parsed map[string]any
+	assert.NoError(t, json.Unmarshal([]byte(js), &parsed))
+	proj := parsed["project"].(map[string]any)
+	assert.Equal(t, "x", proj["sandbox"])
+	assert.Equal(t, "running", proj["state"])
+	pending := proj["pending_changes"].(map[string]any)
+	assert.Equal(t, float64(2), pending["live"])
+	assert.Equal(t, float64(1), pending["recreate"])
+	// Global health block emits both true and false bools explicitly —
+	// no omitempty swallowing the false case.
+	health := parsed["health"].(map[string]any)
+	assert.Contains(t, health, "ca_trusted")
+	assert.Contains(t, health, "dns_healthy")
+	assert.Contains(t, health, "proxy_healthy")
+	ironProxy := proj["iron_proxy"].(map[string]any)
+	assert.Equal(t, "stale", ironProxy["status"])
+	assert.Equal(t, true, ironProxy["needs_secrets"])
+}
+
+func TestFormatStatusJSON_IronProxyNilOmitted(t *testing.T) {
+	js := FormatStatusJSON(StatusResult{HasProject: true, Sandbox: "x", State: "running"})
+	var parsed map[string]any
+	assert.NoError(t, json.Unmarshal([]byte(js), &parsed))
+	proj := parsed["project"].(map[string]any)
+	assert.NotContains(t, proj, "iron_proxy")
+}
+
+func TestFormatStatusJSON_SoftnetDrift_PresentWhenSet(t *testing.T) {
+	js := FormatStatusJSON(StatusResult{HasProject: true, Sandbox: "x", State: "running",
+		SoftnetDrift: &serviceapi.SoftnetDriftInfo{LocalSHA: "aaaa", RemoteSHA: "bbbb", Message: "softnet(sewtrue): drifted"}})
+	var parsed map[string]any
+	require.NoError(t, json.Unmarshal([]byte(js), &parsed))
+	d := parsed["project"].(map[string]any)["softnet_drift"].(map[string]any)
+	assert.Equal(t, "aaaa", d["local_sha"])
+	assert.Equal(t, "bbbb", d["remote_sha"])
+	assert.Equal(t, "softnet(sewtrue): drifted", d["message"])
+}
+
+func TestFormatStatusJSON_SoftnetDrift_OmittedWhenNil(t *testing.T) {
+	js := FormatStatusJSON(StatusResult{HasProject: true, Sandbox: "x", State: "running"})
+	assert.NotContains(t, js, "softnet_drift")
+}
+
+// TestFormatStatusJSON_MutagenHealth proves the single-project
+// `devm status --json` output carries mutagen_health under project
+// when RunStatus populated StatusResult.MutagenHealth.
+func TestFormatStatusJSON_MutagenHealth(t *testing.T) {
+	js := FormatStatusJSON(StatusResult{HasProject: true,
+		Sandbox: "x", State: "running", MutagenHealth: "dead",
+	})
+	var parsed map[string]any
+	assert.NoError(t, json.Unmarshal([]byte(js), &parsed))
+	proj := parsed["project"].(map[string]any)
+	assert.Equal(t, "dead", proj["mutagen_health"])
+}
+
+// TestFormatStatusJSON_MutagenHealthOmittedWhenEmpty proves the field
+// is omitted (not emitted as "") when no verdict has been recorded,
+// matching the omitempty behavior of the other optional health fields.
+func TestFormatStatusJSON_MutagenHealthOmittedWhenEmpty(t *testing.T) {
+	js := FormatStatusJSON(StatusResult{HasProject: true, Sandbox: "x", State: "running"})
+	var parsed map[string]any
+	assert.NoError(t, json.Unmarshal([]byte(js), &parsed))
+	proj := parsed["project"].(map[string]any)
+	assert.NotContains(t, proj, "mutagen_health")
+}
+
+// TestFormatStatusJSON_RebindPresentWhenSet proves the single-project
+// `devm status --json` output carries the rebind report — /status/all's
+// JSON already did, but /status's local `ironProxy` struct dropped it,
+// leaving machine consumers unable to detect a stuck rebind.
+func TestFormatStatusJSON_RebindPresentWhenSet(t *testing.T) {
+	js := FormatStatusJSON(StatusResult{HasProject: true,
+		Sandbox: "x", State: "running",
+		ProxyHealth: &serviceapi.ProxyHealth{
+			Status: serviceapi.ProxyOK,
+			Rebind: &serviceapi.RebindReport{State: serviceapi.RebindFailed, Attempts: 3, LastError: "boom"},
+		},
+	})
+	var parsed map[string]any
+	assert.NoError(t, json.Unmarshal([]byte(js), &parsed))
+	proj := parsed["project"].(map[string]any)
+	ironProxy := proj["iron_proxy"].(map[string]any)
+	rebind := ironProxy["rebind"].(map[string]any)
+	assert.Equal(t, "failed", rebind["state"])
+	assert.Equal(t, float64(3), rebind["attempts"])
+	assert.Equal(t, "boom", rebind["last_error"])
+}
+
+// TestFormatStatusJSON_RebindOmittedWhenNil proves the rebind field is
+// omitted (not emitted as null) when no rebind was attempted, matching
+// the omitempty behavior of the other optional health fields.
+func TestFormatStatusJSON_RebindOmittedWhenNil(t *testing.T) {
+	js := FormatStatusJSON(StatusResult{HasProject: true,
+		Sandbox: "x", State: "running",
+		ProxyHealth: &serviceapi.ProxyHealth{Status: serviceapi.ProxyOK},
+	})
+	var parsed map[string]any
+	assert.NoError(t, json.Unmarshal([]byte(js), &parsed))
+	proj := parsed["project"].(map[string]any)
+	ironProxy := proj["iron_proxy"].(map[string]any)
+	assert.NotContains(t, ironProxy, "rebind")
+}
+
+// TestFormatStatusJSON_ApproveState verifies the JSON payload carries
+// approve_state: {diverged, approved_since} when the daemon returned a
+// verdict, and approve_state: null when it didn't (old daemon, 404).
+func TestFormatStatusJSON_ApproveState(t *testing.T) {
+	since := "2026-08-30T20:00:00Z"
+	js := FormatStatusJSON(StatusResult{HasProject: true, Sandbox: "x", State: "running",
+		ApproveState: &serviceapi.ApproveStateResponse{Diverged: true, ApprovedSince: &since},
+	})
+	var parsed map[string]any
+	require.NoError(t, json.Unmarshal([]byte(js), &parsed))
+	proj := parsed["project"].(map[string]any)
+	as := proj["approve_state"].(map[string]any)
+	assert.Equal(t, true, as["diverged"])
+	assert.Equal(t, since, as["approved_since"])
+}
+
+func TestFormatStatusJSON_ApproveState_NullWhenAbsent(t *testing.T) {
+	js := FormatStatusJSON(StatusResult{HasProject: true, Sandbox: "x", State: "running"})
+	var parsed map[string]any
+	require.NoError(t, json.Unmarshal([]byte(js), &parsed))
+	proj := parsed["project"].(map[string]any)
+	assert.Contains(t, proj, "approve_state")
+	assert.Nil(t, proj["approve_state"])
+}
+
+func TestFormatReconcileJSON(t *testing.T) {
+	js := FormatReconcileJSON(ReconcileResult{
+		Rendered: true, SandboxState: "running",
+		Applied:          []reconcile.Change{{Kind: reconcile.KindPortAdd, Service: "api", Key: "8080", New: "8080"}},
+		RecreateRequired: []reconcile.Change{{Kind: reconcile.KindImageChange}},
+		Flavor:           reconcile.FlavorTeardownVM,
+		Sessions:         []Session{{PID: 27, Comm: "bash", TTY: "pts/1", User: "agent"}},
+		NextAction:       "needs_approval",
+	})
+	var parsed map[string]any
+	assert.NoError(t, json.Unmarshal([]byte(js), &parsed))
+	assert.Equal(t, true, parsed["rendered"])
+	assert.Equal(t, "needs_approval", parsed["next_action"])
+	rec := parsed["recreate_required"].(map[string]any)
+	changes := rec["changes"].([]any)
+	require.Len(t, changes, 1)
+	assert.Equal(t, "image_change", changes[0].(map[string]any)["kind"])
+	assert.NotContains(t, parsed, "restart_required")
+}
+
+func TestFormatReconcileJSON_RestartRequired_SeparateFromRecreate(t *testing.T) {
+	js := FormatReconcileJSON(ReconcileResult{
+		Rendered: true, SandboxState: "running",
+		RecreateRequired: []reconcile.Change{
+			{Kind: reconcile.KindMemoryChange},
+			{Kind: reconcile.KindImageChange},
+		},
+		Flavor:     reconcile.FlavorTeardownVM,
+		NextAction: "needs_approval",
+	})
+	var parsed map[string]any
+	assert.NoError(t, json.Unmarshal([]byte(js), &parsed))
+
+	restart := parsed["restart_required"].(map[string]any)
+	restartChanges := restart["changes"].([]any)
+	require.Len(t, restartChanges, 1)
+	assert.Equal(t, "memory_change", restartChanges[0].(map[string]any)["kind"])
+
+	recreate := parsed["recreate_required"].(map[string]any)
+	recreateChanges := recreate["changes"].([]any)
+	require.Len(t, recreateChanges, 1)
+	assert.Equal(t, "image_change", recreateChanges[0].(map[string]any)["kind"])
+}
+
+func TestFormatStatusText_ProxyUnreachable(t *testing.T) {
+	res := StatusResult{HasProject: true,
+		Routing: serviceapi.RoutingStatus{Proxy: "devm", ProxyReachable: false},
+	}
+	text := FormatStatusText(res)
+	assert.Contains(t, text, "proxy: devm (unreachable)")
+}
+
+func TestFormatStatusText_NoRoutes(t *testing.T) {
+	res := StatusResult{HasProject: true,
+		Routing: serviceapi.RoutingStatus{Proxy: "devm", ProxyReachable: true, Mode: ""},
+	}
+	text := FormatStatusText(res)
+	assert.Contains(t, text, "mode: (no routes)")
+}
+
+func TestFormatStatusText_VMMode_WithRoutes(t *testing.T) {
+	res := StatusResult{HasProject: true,
+		Routing: serviceapi.RoutingStatus{
+			Proxy: "devm", ProxyReachable: true, Mode: "vm",
+			Routes: []serviceapi.RouteStatus{
+				{Hostname: "api.foo.test", Dial: "localhost:55432", Mode: "vm"},
+				{Hostname: "app.foo.test", Dial: "localhost:53000", Mode: "vm"},
+			},
+		},
+	}
+	text := FormatStatusText(res)
+	assert.Contains(t, text, "mode:")
+	assert.Contains(t, text, "vm")
+	assert.Contains(t, text, "api.foo.test")
+	assert.Contains(t, text, "localhost:55432")
+	assert.NotContains(t, text, "resolves")
+}
+
+func TestFormatStatusText_FiltersReservedRoutes(t *testing.T) {
+	// All reserved route families — the `_devm.` prefix health route,
+	// the files.<project>.<tld> filestash route and the
+	// preview.<project>.<tld> preview route (no underscore prefix,
+	// identified by exact hostname shape instead) — must be
+	// hidden from the routes table; only the user-declared route
+	// should render.
+	res := StatusResult{HasProject: true,
+		TLD: "test",
+		Routing: serviceapi.RoutingStatus{
+			Proxy: "devm", ProxyReachable: true, Mode: "vm",
+			Routes: []serviceapi.RouteStatus{
+				{Hostname: "_devm.foo.test", Dial: "127.42.0.1:8940", Mode: "vm", Project: "foo"},
+				{Hostname: "files.foo.test", Dial: "127.42.0.1:8941", Mode: "vm", Project: "foo"},
+				{Hostname: "preview.foo.test", Dial: "127.42.0.1:8940", Mode: "vm", Project: "foo"},
+				{Hostname: "app.foo.test", Dial: "localhost:3000", Mode: "vm", Project: "foo"},
+			},
+		},
+	}
+	text := FormatStatusText(res)
+	assert.Contains(t, text, "app.foo.test")
+	assert.NotContains(t, text, "preview.foo.test")
+	assert.NotContains(t, text, "_devm.foo.test")
+	assert.NotContains(t, text, "files.foo.test")
+}
+
+func TestFormatStatusText_Wildcard_TagsAndShowsReservedCarveOut(t *testing.T) {
+	// A project declaring a single-label wildcard gets a WILDCARD
+	// tag next to the wildcard row. Any daemon-reserved exact in the
+	// same project that the wildcard's pattern would cover is
+	// unhidden from the routes table (reserved routes are otherwise
+	// filtered) and tagged "(reserved exact)" so the operator sees
+	// that the specific name is still carved out and still routes
+	// via exact-match-beats-wildcard. User-declared exacts covered
+	// by the wildcard already render in the base table — they get
+	// an "(exact under *.X)" tag so the carve-out intent is visible.
+	// Project "myproj" declares a wildcard that covers the daemon-
+	// reserved files.myproj.test exact, and also a user-declared exact
+	// under its own pieces subdomain wildcard.
+	res := StatusResult{HasProject: true,
+		TLD: "test",
+		Routing: serviceapi.RoutingStatus{
+			Proxy: "devm", ProxyReachable: true, Mode: "vm",
+			Routes: []serviceapi.RouteStatus{
+				{Hostname: "*.myproj.test", Dial: "localhost:8791", Mode: "vm", Project: "myproj"},
+				{Hostname: "files.myproj.test", Dial: "127.42.0.1:8941", Mode: "vm", Project: "myproj"},
+				{Hostname: "api.myproj.test", Dial: "localhost:8792", Mode: "vm", Project: "myproj"},
+			},
+		},
+	}
+	text := FormatStatusText(res)
+	assert.Contains(t, text, "*.myproj.test")
+	assert.Contains(t, text, "WILDCARD",
+		"wildcard row must carry the WILDCARD tag")
+	assert.Contains(t, text, "api.myproj.test",
+		"same-project exact under the wildcard still renders")
+	assert.Contains(t, text, "files.myproj.test",
+		"reserved exact under a same-project wildcard must be unhidden")
+	assert.Contains(t, text, "(reserved exact",
+		"reserved exact under a wildcard must carry the reserved tag")
+}
+
+func TestFormatStatusText_MixedMode_TagsRoutes(t *testing.T) {
+	res := StatusResult{HasProject: true,
+		Routing: serviceapi.RoutingStatus{
+			Proxy: "devm", ProxyReachable: true, Mode: "mixed (drift)",
+			Routes: []serviceapi.RouteStatus{
+				{Hostname: "api.foo.test", Dial: "localhost:55432", Mode: "vm"},
+				{Hostname: "app.foo.test", Dial: "localhost:3000", Mode: "local"},
+			},
+		},
+	}
+	text := FormatStatusText(res)
+	assert.Contains(t, text, "mixed (drift)")
+	assert.Contains(t, text, "(vm)")
+	assert.Contains(t, text, "(local)")
+}
+
+func TestFormatStatusText_DNSLine_SilentWhenHealthy(t *testing.T) {
+	res := StatusResult{HasProject: true,
+		Sandbox: "test", State: "running",
+		DNSHealthy: true,
+	}
+	out := FormatStatusText(res)
+	assert.NotContains(t, out, "dns:", "DNS line should be invisible when healthy")
+}
+
+func TestFormatStatusText_DNSLine_RedWhenUnhealthy(t *testing.T) {
+	res := StatusResult{HasProject: true,
+		Sandbox: "test", State: "running",
+		DNSHealthy: false, DNSError: "resolving foo: timeout",
+	}
+	out := FormatStatusText(res)
+	assert.Contains(t, out, "dns: NOT WORKING")
+	assert.Contains(t, out, "resolving foo: timeout")
+	assert.Contains(t, out, "devm install")
+}
+
+func TestFormatStatusText_CALine_SilentWhenTrusted(t *testing.T) {
+	res := StatusResult{HasProject: true,
+		Sandbox: "x", State: "running",
+		DNSHealthy: true, CATrusted: true, ProxyHealthy: true,
+	}
+	assert.NotContains(t, FormatStatusText(res), "ca:")
+}
+
+func TestFormatStatusText_CALine_RedWhenUntrusted(t *testing.T) {
+	res := StatusResult{HasProject: true,
+		Sandbox: "x", State: "running",
+		DNSHealthy: true, CATrusted: false, ProxyHealthy: true,
+	}
+	out := FormatStatusText(res)
+	assert.Contains(t, out, "ca: NOT TRUSTED")
+	assert.Contains(t, out, "devm install")
+}
+
+func TestFormatStatusText_ProxyLine_SilentWhenHealthy(t *testing.T) {
+	res := StatusResult{HasProject: true,
+		Sandbox: "x", State: "running",
+		DNSHealthy: true, CATrusted: true, ProxyHealthy: true,
+	}
+	assert.NotContains(t, FormatStatusText(res), "proxy: UNHEALTHY")
+}
+
+func TestFormatStatusText_ProxyLine_RedWhenDown(t *testing.T) {
+	res := StatusResult{HasProject: true,
+		Sandbox: "x", State: "running",
+		DNSHealthy: true, CATrusted: true,
+		ProxyHealthy: false,
+		ProxyError:   "proxy listener unhealthy for: x",
+	}
+	out := FormatStatusText(res)
+	assert.Contains(t, out, "proxy: UNHEALTHY")
+	assert.Contains(t, out, "proxy listener unhealthy for: x")
+}
+
+func TestFormatStatusText_IronProxyHealth_OK(t *testing.T) {
+	res := StatusResult{HasProject: true,
+		Sandbox: "x", State: "running",
+		ProxyHealth: &serviceapi.ProxyHealth{Status: serviceapi.ProxyOK},
+	}
+	out := FormatStatusText(res)
+	assert.Contains(t, out, "iron-proxy: ok")
+}
+
+func TestFormatStatusText_IronProxyHealth_Missing(t *testing.T) {
+	res := StatusResult{HasProject: true,
+		Sandbox: "x", State: "running",
+		ProxyHealth: &serviceapi.ProxyHealth{Status: serviceapi.ProxyMissing},
+	}
+	out := FormatStatusText(res)
+	assert.Contains(t, out, "iron-proxy: MISSING (run 'devm reconcile')")
+}
+
+func TestFormatStatusText_IronProxyHealth_Stale(t *testing.T) {
+	res := StatusResult{HasProject: true,
+		Sandbox: "x", State: "running",
+		ProxyHealth: &serviceapi.ProxyHealth{Status: serviceapi.ProxyStale},
+	}
+	out := FormatStatusText(res)
+	assert.Contains(t, out, "iron-proxy: STALE (run 'devm reconcile')")
+}
+
+func TestFormatStatusText_IronProxyHealth_NilOmitsLine(t *testing.T) {
+	res := StatusResult{HasProject: true, Sandbox: "x", State: "running"}
+	out := FormatStatusText(res)
+	assert.NotContains(t, out, "iron-proxy:")
+}
+
+func TestFormatStatusText_LANListener_NotBound(t *testing.T) {
+	res := StatusResult{HasProject: true,
+		Routing: serviceapi.RoutingStatus{Proxy: "devm", ProxyReachable: true},
+	}
+	out := FormatStatusText(res)
+	assert.Contains(t, out, "LAN listener: not bound")
+}
+
+func TestFormatStatusText_LANListener_Bound(t *testing.T) {
+	res := StatusResult{HasProject: true,
+		Routing: serviceapi.RoutingStatus{
+			Proxy: "devm", ProxyReachable: true, Mode: "vm",
+			Routes: []serviceapi.RouteStatus{
+				{Hostname: "api.foo.test", Dial: "127.42.0.1:8080", Mode: "vm"},
+			},
+			LANExposedCount: 3,
+		},
+	}
+	out := FormatStatusText(res)
+	assert.Contains(t, out, "LAN listener: bound on 0.0.0.0:42000 (3 hostnames exposed)")
+	assert.NotContains(t, out, "not bound")
+}
+
+func TestFormatStatusText_ApproveGate_Diverged(t *testing.T) {
+	res := StatusResult{HasProject: true, Sandbox: "x", State: "running",
+		ApproveState: &serviceapi.ApproveStateResponse{Diverged: true},
+	}
+	out := FormatStatusText(res)
+	assert.Contains(t, out, "devm.yaml has changed since last approval")
+	assert.Contains(t, out, "Review")
+}
+
+func TestFormatStatusText_ApproveGate_UpToDate(t *testing.T) {
+	res := StatusResult{HasProject: true, Sandbox: "x", State: "running",
+		ApproveState: &serviceapi.ApproveStateResponse{Diverged: false},
+	}
+	out := FormatStatusText(res)
+	assert.Contains(t, out, "Approve gate: up to date.")
+}
+
+// TestFormatStatusText_ApproveGate_SilentWhenNil verifies the
+// approve-gate line is omitted entirely — not rendered as an error —
+// when ApproveState is nil and there was no error, matching the
+// silent-degrade contract for a daemon predating the approve gate.
+func TestFormatStatusText_ApproveGate_SilentWhenNil(t *testing.T) {
+	res := StatusResult{HasProject: true, Sandbox: "x", State: "running"}
+	out := FormatStatusText(res)
+	assert.NotContains(t, out, "Approve gate")
+}
+
+func TestFormatStatusText_SoftnetDrift_PrintsMessage(t *testing.T) {
+	res := StatusResult{HasProject: true, Sandbox: "x", State: "running",
+		SoftnetDrift: &serviceapi.SoftnetDriftInfo{
+			LocalSHA: "aaaa", RemoteSHA: "bbbb",
+			Message: "softnet(sewtrue): subprocess is running an older contract (sha=bbbb, build=aaaa).\nRestart the VM to pick up the current code:\n    cd /workspace/sewtrue && devm stop && devm start",
+		},
+	}
+	out := FormatStatusText(res)
+	assert.Contains(t, out, "softnet(sewtrue)")
+	assert.Contains(t, out, "devm stop && devm start")
+}
+
+func TestFormatStatusText_SoftnetDrift_SilentWhenNil(t *testing.T) {
+	res := StatusResult{HasProject: true, Sandbox: "x", State: "running"}
+	assert.NotContains(t, FormatStatusText(res), "softnet(")
+}
+
+func TestFormatStatusText_ApproveGate_CheckFailed(t *testing.T) {
+	res := StatusResult{HasProject: true, Sandbox: "x", State: "running",
+		ApproveError: "dial daemon: connection refused",
+	}
+	out := FormatStatusText(res)
+	assert.Contains(t, out, "Approve gate: check failed: dial daemon: connection refused")
+}
+
+func TestFormatDaemonStatus_MismatchColor(t *testing.T) {
+	d := DaemonStatus{
+		Running: true, BinaryPath: "/opt/devm/bin/devm",
+		Fingerprint: "abc", FingerprintMatchesCLI: false,
+	}
+	t.Run("plain_when_disabled", func(t *testing.T) {
+		UseColor = false
+		out := formatDaemonStatus(d)
+		assert.Contains(t, out, "MISMATCH")
+		assert.NotContains(t, out, "\x1b[")
+	})
+	t.Run("red_when_enabled", func(t *testing.T) {
+		UseColor = true
+		defer func() { UseColor = false }()
+		out := formatDaemonStatus(d)
+		assert.Contains(t, out, "\x1b[31m")
+		assert.Contains(t, out, "\x1b[0m")
+	})
+}
+
+func TestFormatStatusAllText_TableShape(t *testing.T) {
+	rows := []serviceapi.ProjectStatus{
+		{Name: "sewtrue", VMRunning: true, Proxy: serviceapi.ProxyHealth{Status: serviceapi.ProxyMissing}},
+		{Name: "everstone", VMRunning: true, Proxy: serviceapi.ProxyHealth{Status: serviceapi.ProxyOK}},
+		{Name: "ship5", VMRunning: false, Proxy: serviceapi.ProxyHealth{Status: serviceapi.ProxyMissing}},
+	}
+	UseColor = false
+	out := FormatStatusAllText(rows)
+
+	assert.Contains(t, out, "PROJECT")
+	assert.Contains(t, out, "VM")
+	assert.Contains(t, out, "IRON-PROXY")
+	assert.Contains(t, out, "RECONCILE")
+
+	assert.Regexp(t, `sewtrue\s+running\s+MISSING\s+required`, out)
+	assert.Regexp(t, `everstone\s+running\s+ok\s+—`, out)
+	assert.Regexp(t, `ship5\s+stopped\s+—\s+—`, out)
+}
+
+// An orphaned row (running devm VM without daemon state) renders as
+// ORPHANED with a recovery footer, and never claims a proxy verdict.
+func TestFormatStatusAllText_OrphanedRow(t *testing.T) {
+	rows := []serviceapi.ProjectStatus{
+		{Name: "tracked", VMRunning: true, Proxy: serviceapi.ProxyHealth{Status: serviceapi.ProxyOK}},
+		{Name: "lost", VMRunning: true, Orphaned: true},
+	}
+	UseColor = false
+	out := FormatStatusAllText(rows)
+	assert.Regexp(t, `lost\s+ORPHANED\s+—\s+—`, out)
+	assert.Contains(t, out, "no daemon state")
+	assert.Contains(t, out, "`devm stop`")
+}
+
+func TestFormatStatusAllText_StaleShowsReconcileRequired(t *testing.T) {
+	rows := []serviceapi.ProjectStatus{
+		{Name: "p", VMRunning: true, Proxy: serviceapi.ProxyHealth{Status: serviceapi.ProxyStale}},
+	}
+	UseColor = false
+	out := FormatStatusAllText(rows)
+	assert.Regexp(t, `p\s+running\s+STALE\s+required`, out)
+}
+
+// TestFormatStatusAllText_StuckRebindShowsUnbound proves a failed
+// startup rebind is surfaced via a footer note (not by overloading the
+// IRON-PROXY column), and that the IRON-PROXY column keeps showing the
+// real r.Proxy.Status — iron-proxy and the rebind are different
+// subsystems, and a project with healthy iron-proxy but a failed
+// rebind must not read as iron-proxy itself being broken.
+func TestFormatStatusAllText_StuckRebindShowsUnbound(t *testing.T) {
+	rows := []serviceapi.ProjectStatus{
+		{
+			Name:      "p",
+			VMRunning: true,
+			Proxy: serviceapi.ProxyHealth{
+				Status: serviceapi.ProxyOK,
+				Rebind: &serviceapi.RebindReport{State: serviceapi.RebindFailed, Attempts: 3, LastError: "boom"},
+			},
+		},
+	}
+	UseColor = false
+	out := FormatStatusAllText(rows)
+	// IRON-PROXY column unchanged: still "ok", still under RECONCILE "—".
+	assert.Regexp(t, `p\s+running\s+ok\s+—`, out)
+	// Rebind failure surfaced separately, with the real error and recovery command.
+	assert.Contains(t, out, "Note: project p has proxy listeners UNBOUND — boom")
+	assert.Contains(t, out, "Recovery: cd to project p's directory, then `devm stop && devm start`")
+}
+
+// TestFormatStatusAllText_IronProxyColumnUnaffectedByRebindState proves
+// the IRON-PROXY column always reflects the underlying r.Proxy.Status
+// verdict regardless of rebind state — MISSING/STALE still show
+// "required" under RECONCILE even when a rebind also failed, and the
+// column text is never clobbered with "UNBOUND".
+func TestFormatStatusAllText_IronProxyColumnUnaffectedByRebindState(t *testing.T) {
+	rows := []serviceapi.ProjectStatus{
+		{
+			Name:      "p",
+			VMRunning: true,
+			Proxy: serviceapi.ProxyHealth{
+				Status: serviceapi.ProxyMissing,
+				Rebind: &serviceapi.RebindReport{State: serviceapi.RebindFailed, Attempts: 2, LastError: "bind :80: address in use"},
+			},
+		},
+	}
+	UseColor = false
+	out := FormatStatusAllText(rows)
+	// Table row: IRON-PROXY column shows MISSING, RECONCILE shows required —
+	// the column is driven solely by r.Proxy.Status, never by rebind state.
+	lines := strings.Split(out, "\n")
+	require.Regexp(t, `^p\s+running\s+MISSING\s+required\s*$`, lines[1])
+	assert.Contains(t, out, "Note: project p has proxy listeners UNBOUND — bind :80: address in use")
+	assert.Contains(t, out, "Recovery: cd to project p's directory, then `devm stop && devm start`")
+}
+
+func TestFormatStatusAllText_Empty(t *testing.T) {
+	UseColor = false
+	out := FormatStatusAllText(nil)
+	assert.Contains(t, out, "No projects")
+}
+
+func TestFormatStatusAllText_Color(t *testing.T) {
+	rows := []serviceapi.ProjectStatus{
+		{Name: "ok-proj", VMRunning: true, Proxy: serviceapi.ProxyHealth{Status: serviceapi.ProxyOK}},
+		{Name: "bad-proj", VMRunning: true, Proxy: serviceapi.ProxyHealth{Status: serviceapi.ProxyMissing}},
+	}
+	t.Run("plain_when_disabled", func(t *testing.T) {
+		UseColor = false
+		out := FormatStatusAllText(rows)
+		assert.NotContains(t, out, "\x1b[")
+	})
+	t.Run("colored_when_enabled", func(t *testing.T) {
+		UseColor = true
+		defer func() { UseColor = false }()
+		out := FormatStatusAllText(rows)
+		assert.Contains(t, out, "\x1b[32mok\x1b[0m")
+		assert.Contains(t, out, "\x1b[31mMISSING\x1b[0m")
+	})
+}
+
+func TestFormatStatusAllJSON(t *testing.T) {
+	rows := []serviceapi.ProjectStatus{
+		{Name: "p", VMRunning: true, Proxy: serviceapi.ProxyHealth{Status: serviceapi.ProxyOK}},
+	}
+	out := FormatStatusAllJSON(rows)
+	assert.Contains(t, out, `"name": "p"`)
+	assert.Contains(t, out, `"vm_running": true`)
+	assert.Contains(t, out, `"status": "ok"`)
+}
+
+func TestFormatChange_Template(t *testing.T) {
+	// Added template.
+	added := reconcile.Change{Kind: reconcile.KindTemplateChange, Service: "web", Detail: "/etc/nginx/nginx.conf", New: "installed"}
+	assert.Equal(t, "+ template: web → /etc/nginx/nginx.conf", formatChange(added))
+
+	// Changed template.
+	changed := reconcile.Change{Kind: reconcile.KindTemplateChange, Service: "web", Detail: "/etc/nginx/nginx.conf", Old: "previous", New: "updated"}
+	assert.Equal(t, "~ template: web → /etc/nginx/nginx.conf", formatChange(changed))
+
+	// Removed template.
+	removed := reconcile.Change{Kind: reconcile.KindTemplateChange, Service: "", Detail: "00-web-nginx.conf.sh", Old: "previous"}
+	assert.Equal(t, "- template: 00-web-nginx.conf.sh (sandbox file persists; recreate to wipe)", formatChange(removed))
+
+	// JSON mapping.
+	assert.Equal(t, "template_change", changeKindJSON(reconcile.KindTemplateChange))
+}
+
+func TestFormatChange_ServiceDirect(t *testing.T) {
+	turnedOn := reconcile.Change{Kind: reconcile.KindServiceDirectChange, Service: "db", Old: "false", New: "true"}
+	assert.Equal(t, "~ service direct: db: on", formatChange(turnedOn))
+
+	turnedOff := reconcile.Change{Kind: reconcile.KindServiceDirectChange, Service: "db", Old: "true", New: "false"}
+	assert.Equal(t, "~ service direct: db: off", formatChange(turnedOff))
+
+	assert.Equal(t, "service_direct_change", changeKindJSON(reconcile.KindServiceDirectChange))
+}
+
+func TestFormatChange_Package(t *testing.T) {
+	added := reconcile.Change{Kind: reconcile.KindPackageAdd, Key: "ripgrep", New: "ripgrep"}
+	assert.Equal(t, "+ package ripgrep", formatChange(added))
+	assert.Equal(t, "package_add", changeKindJSON(reconcile.KindPackageAdd))
+
+	removed := reconcile.Change{Kind: reconcile.KindPackageRemove, Key: "jq", Old: "jq"}
+	assert.Equal(t, "- package jq", formatChange(removed))
+	assert.Equal(t, "package_remove", changeKindJSON(reconcile.KindPackageRemove))
+}
+
+func TestFormatStatusText_UnboundRebindShowsRecovery(t *testing.T) {
+	ph := &serviceapi.ProxyHealth{
+		Status: serviceapi.ProxyOK,
+		Rebind: &serviceapi.RebindReport{
+			State:     serviceapi.RebindFailed,
+			Attempts:  3,
+			LastError: "bind :80 on 127.42.0.1: helper: connection refused",
+		},
+	}
+	r := StatusResult{
+		HasProject:   true,
+		DNSHealthy:   true,
+		CATrusted:    true,
+		ProxyHealthy: true,
+		ProxyHealth:  ph,
+		State:        "running",
+	}
+	out := FormatStatusText(r)
+	assert.Contains(t, out, "proxy listeners: UNBOUND")
+	assert.Contains(t, out, "helper: connection refused")
+	assert.Contains(t, out, "Recovery: `devm stop && devm start` (from the project directory)")
+}
+
+func TestFormatStatusText_HealthyRebindNoWarning(t *testing.T) {
+	ph := &serviceapi.ProxyHealth{
+		Status: serviceapi.ProxyOK,
+		Rebind: &serviceapi.RebindReport{State: serviceapi.RebindOK, Attempts: 1},
+	}
+	r := StatusResult{
+		HasProject:   true,
+		DNSHealthy:   true,
+		CATrusted:    true,
+		ProxyHealthy: true,
+		ProxyHealth:  ph,
+		State:        "running",
+	}
+	out := FormatStatusText(r)
+	assert.NotContains(t, out, "UNBOUND")
+	assert.NotContains(t, out, "Recovery:")
+}
+
+func TestFormatChange_KindMemoryChange(t *testing.T) {
+	ch := reconcile.Change{
+		Kind: reconcile.KindMemoryChange,
+		Old:  "(default)",
+		New:  "8G",
+	}
+	assert.Equal(t, "~ memory: (default) → 8G", formatChange(ch))
+}
+
+func TestFormatChange_KindCpuChange(t *testing.T) {
+	ch := reconcile.Change{
+		Kind: reconcile.KindCpuChange,
+		Old:  "6",
+		New:  "(default)",
+	}
+	assert.Equal(t, "~ cpu: 6 → (default)", formatChange(ch))
+}
+
+func TestFormatChange_KindRepoChange_Add(t *testing.T) {
+	ch := reconcile.Change{Kind: reconcile.KindRepoChange, Op: reconcile.OpAdd, Key: "main"}
+	assert.Equal(t, "+ repo main", formatChange(ch))
+}
+
+func TestFormatChange_KindRepoChange_Remove(t *testing.T) {
+	ch := reconcile.Change{Kind: reconcile.KindRepoChange, Op: reconcile.OpRemove, Key: "main"}
+	assert.Equal(t, "- repo main", formatChange(ch))
+}
+
+func TestFormatChange_KindRepoChange_URLMutate(t *testing.T) {
+	oldURL, newURL := "git@example.com:a/b.git", "git@example.com:a/c.git"
+	ch := reconcile.Change{
+		Kind: reconcile.KindRepoChange, Op: reconcile.OpMutate, Key: "main", Field: "URL",
+		OldValue: &oldURL, NewValue: &newURL,
+	}
+	assert.Equal(t, `~ repo main.URL: "git@example.com:a/b.git" → "git@example.com:a/c.git"`, formatChange(ch))
+}
+
+func TestFormatChange_KindRepoChange_URLMutate_TruncatesLongValue(t *testing.T) {
+	oldURL := strings.Repeat("x", 100)
+	newURL := "git@example.com:a/c.git"
+	ch := reconcile.Change{
+		Kind: reconcile.KindRepoChange, Op: reconcile.OpMutate, Key: "main", Field: "URL",
+		OldValue: &oldURL, NewValue: &newURL,
+	}
+	got := formatChange(ch)
+	assert.Contains(t, got, "…")
+	assert.NotContains(t, got, strings.Repeat("x", 100))
+}
+
+func TestFormatChange_KindRepoChange_LabelMutate(t *testing.T) {
+	newLabel := "main"
+	ch := reconcile.Change{
+		Kind: reconcile.KindRepoChange, Op: reconcile.OpMutate, Key: "main", Field: "Label",
+		OldValue: (*string)(nil), NewValue: &newLabel,
+	}
+	assert.Equal(t, `~ repo main.Label: (unset) → "main"`, formatChange(ch))
+}
+
+func TestFormatChange_KindVolumeChange_Add(t *testing.T) {
+	ch := reconcile.Change{Kind: reconcile.KindVolumeChange, Op: reconcile.OpAdd, Key: "claude", New: "/home/devm/.claude"}
+	assert.Equal(t, "+ volume claude at /home/devm/.claude", formatChange(ch))
+}
+
+func TestFormatChange_KindVolumeChange_Remove(t *testing.T) {
+	ch := reconcile.Change{Kind: reconcile.KindVolumeChange, Op: reconcile.OpRemove, Key: "old-name"}
+	assert.Equal(t, "- volume old-name", formatChange(ch))
+}
+
+func TestFormatChange_KindVolumeChange_LabelMutate(t *testing.T) {
+	oldLabel, newLabel := "old-label", "new-label"
+	ch := reconcile.Change{
+		Kind: reconcile.KindVolumeChange, Op: reconcile.OpMutate, Key: "claude", Field: "label",
+		OldValue: &oldLabel, NewValue: &newLabel,
+	}
+	assert.Equal(t, `~ volume claude.label: "old-label" → "new-label"`, formatChange(ch))
+}
+
+func TestFormatChange_KindCommandsChange(t *testing.T) {
+	added := reconcile.Change{Kind: reconcile.KindCommandsChange, Op: reconcile.OpAdd, Repo: "main", Key: "install"}
+	assert.Equal(t, "+ command main/install", formatChange(added))
+
+	removed := reconcile.Change{Kind: reconcile.KindCommandsChange, Op: reconcile.OpRemove, Repo: "main", Key: "install"}
+	assert.Equal(t, "- command main/install", formatChange(removed))
+
+	oldExec, newExec := "pnpm install", "pnpm install --frozen-lockfile"
+	execMutate := reconcile.Change{
+		Kind: reconcile.KindCommandsChange, Op: reconcile.OpMutate, Repo: "main", Key: "install", Field: "Exec",
+		OldValue: oldExec, NewValue: newExec,
+	}
+	assert.Equal(t, `~ command main/install.Exec: "pnpm install" → "pnpm install --frozen-lockfile"`, formatChange(execMutate))
+
+	newStartup := true
+	startupMutate := reconcile.Change{
+		Kind: reconcile.KindCommandsChange, Op: reconcile.OpMutate, Repo: "main", Key: "install", Field: "Startup",
+		OldValue: (*bool)(nil), NewValue: &newStartup,
+	}
+	assert.Equal(t, `~ command main/install.Startup: (unset) → "true"`, formatChange(startupMutate))
+
+	assert.Equal(t, "commands_change", changeKindJSON(reconcile.KindCommandsChange))
+}
+
+// TestFormatReconcileText_BundleRefreshRendersOneLine pins the
+// human-readable line the reconcile formatter emits for a
+// KindBundleRefresh entry: the synthetic bundle-drift change kind must
+// render as its own indented row alongside any other applied live
+// changes.
+func TestFormatReconcileText_BundleRefreshRendersOneLine(t *testing.T) {
+	out := FormatReconcileText(ReconcileResult{
+		Applied: []reconcile.Change{{Kind: reconcile.KindBundleRefresh}},
+	})
+	assert.Contains(t, out, "~ bundle: refreshed (daemon fingerprint updated)")
+}
+
+// TestFormatReconcileText_PathChangeRendersOneLine pins the
+// human-readable line for KindPathChange, which the formatter now
+// covers explicitly instead of falling through to "(unknown change)".
+func TestFormatReconcileText_PathChangeRendersOneLine(t *testing.T) {
+	out := FormatReconcileText(ReconcileResult{
+		Applied: []reconcile.Change{{Kind: reconcile.KindPathChange, Old: "/old", New: "/new"}},
+	})
+	assert.Contains(t, out, "~ path:")
+	assert.Contains(t, out, "/new")
+}
+
+// TestFormatReconcileText_NoChangesEmitsConvergedLine proves the
+// zero-change reconcile no longer renders as an empty string — the
+// user sees an explicit "converged" acknowledgement.
+func TestFormatReconcileText_NoChangesEmitsConvergedLine(t *testing.T) {
+	out := FormatReconcileText(ReconcileResult{})
+	assert.Contains(t, out, "Sandbox converged; no changes.")
+}
+
+// TestChangeKindJSON_HandlesBundleRefreshAndPathChange pins that
+// changeKindJSON maps the newer kinds explicitly rather than falling
+// through to "unknown" — otherwise `devm reconcile --json` would
+// silently regress on any reconcile whose changes include one of these.
+func TestChangeKindJSON_HandlesBundleRefreshAndPathChange(t *testing.T) {
+	assert.Equal(t, "bundle_refresh", changeKindJSON(reconcile.KindBundleRefresh))
+	assert.Equal(t, "path_change", changeKindJSON(reconcile.KindPathChange))
+}
+
+// TestFormatReconcileText_PendingRendersWillApplyOnNextStart pins the
+// stopped-VM UX: a bundle-refresh recorded on a stopped VM must appear
+// under "will apply on next `devm start`" instead of being silently
+// dropped into a spurious "converged" verdict.
+func TestFormatReconcileText_PendingRendersWillApplyOnNextStart(t *testing.T) {
+	out := FormatReconcileText(ReconcileResult{
+		SandboxState: "stopped",
+		Pending:      []reconcile.Change{{Kind: reconcile.KindBundleRefresh}},
+	})
+	assert.Contains(t, out, "1 change(s) will apply on next `devm start`:")
+	assert.Contains(t, out, "~ bundle: refreshed (daemon fingerprint updated)")
+	assert.NotContains(t, out, "Sandbox converged")
+}
+
+// TestFormatReconcileJSON_PendingSerialized proves the JSON output
+// carries the pending changes under a top-level "pending" array so a
+// JSON consumer can see the same drift the human formatter does.
+func TestFormatReconcileJSON_PendingSerialized(t *testing.T) {
+	out := FormatReconcileJSON(ReconcileResult{
+		Rendered:     true,
+		SandboxState: "stopped",
+		Pending:      []reconcile.Change{{Kind: reconcile.KindBundleRefresh}},
+	})
+	var parsed struct {
+		Pending []struct {
+			Kind string `json:"kind"`
+		} `json:"pending"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(out), &parsed))
+	require.Len(t, parsed.Pending, 1)
+	assert.Equal(t, "bundle_refresh", parsed.Pending[0].Kind)
+}
+
+func TestFormatReconcileText_SoftnetDrift_PrintsWhenConverged(t *testing.T) {
+	out := FormatReconcileText(ReconcileResult{
+		SoftnetDrift: &serviceapi.SoftnetDriftInfo{Message: "softnet(sewtrue): drifted"}})
+	assert.Contains(t, out, "Sandbox converged; no changes.")
+	assert.Contains(t, out, "softnet(sewtrue): drifted")
+}
+
+func TestFormatReconcileText_SoftnetDrift_PrintsAfterChanges(t *testing.T) {
+	out := FormatReconcileText(ReconcileResult{
+		Applied:      []reconcile.Change{{Kind: reconcile.KindPortAdd, Service: "api", Key: "8080", New: "8080"}},
+		SoftnetDrift: &serviceapi.SoftnetDriftInfo{Message: "softnet(sewtrue): drifted"}})
+	assert.Contains(t, out, "Applied 1 live change")
+	assert.Contains(t, out, "softnet(sewtrue): drifted")
+}
+
+func TestFormatReconcileText_SoftnetDrift_SilentWhenNil(t *testing.T) {
+	assert.NotContains(t, FormatReconcileText(ReconcileResult{}), "softnet")
+}
+
+func TestFormatReconcileJSON_SoftnetDrift(t *testing.T) {
+	js := FormatReconcileJSON(ReconcileResult{
+		SoftnetDrift: &serviceapi.SoftnetDriftInfo{LocalSHA: "aaaa", RemoteSHA: "bbbb", Message: "m"}})
+	var parsed map[string]any
+	require.NoError(t, json.Unmarshal([]byte(js), &parsed))
+	d := parsed["softnet_drift"].(map[string]any)
+	assert.Equal(t, "aaaa", d["local_sha"])
+	assert.NotContains(t, FormatReconcileJSON(ReconcileResult{}), "softnet_drift")
+}
+
+// seedSnapshotIdent points $HOME at a temp dir and returns an identity
+// whose RuntimeDir() resolves under it, so snapshot primitives can
+// seed state the formatter will read back.
+func seedSnapshotIdent(t *testing.T) identity.Config {
+	t.Helper()
+	t.Setenv("HOME", t.TempDir())
+	return identity.Config{Name: "devm-test"}
+}
+
+func TestFormatSnapshotsStatus_EmptyDeclaration_OmitsSection(t *testing.T) {
+	ident := seedSnapshotIdent(t)
+	cfg := schema.Config{Project: schema.Project{Name: "p"}}
+	assert.Equal(t, "", FormatSnapshotsStatus(cfg, ident, "p"))
+}
+
+func TestFormatSnapshotsStatus_OneSuccessOneFail(t *testing.T) {
+	ident := seedSnapshotIdent(t)
+	cfg := schema.Config{
+		Project: schema.Project{Name: "p"},
+		Snapshots: schema.OrderedMap[schema.Snapshot]{
+			Entries: map[string]schema.Snapshot{"pg": {}, "redis": {}},
+			Order:   []string{"pg", "redis"},
+		},
+	}
+
+	pgDir := snapshot.EntryDir(ident, "p", "pg")
+	pgTS := "2026-11-16T0300-00"
+	require.NoError(t, snapshot.EnsureEntryDir(ident, "p", "pg"))
+	require.NoError(t, writeTouchFile(filepath.Join(pgDir, pgTS+".zst")))
+	require.NoError(t, snapshot.WriteMeta(pgDir, pgTS, snapshot.Meta{
+		TS: pgTS, HookName: "backup_pg", ArchiveName: "pg",
+		Source: snapshot.SourceCron, ExitCode: 0,
+		DurationMs: 2400, SizeBytes: 12 * 1024 * 1024,
+	}))
+	require.NoError(t, snapshot.UpdateLatest(pgDir, pgTS))
+
+	redisDir := snapshot.EntryDir(ident, "p", "redis")
+	redisTS := "2026-11-15T0300-00"
+	require.NoError(t, snapshot.EnsureEntryDir(ident, "p", "redis"))
+	require.NoError(t, writeTouchFile(filepath.Join(redisDir, redisTS+".zst")))
+	require.NoError(t, snapshot.WriteMeta(redisDir, redisTS, snapshot.Meta{
+		TS: redisTS, HookName: "backup_redis", ArchiveName: "redis",
+		Source: snapshot.SourceCron, ExitCode: 1,
+		DurationMs: 500, SizeBytes: 0,
+	}))
+	require.NoError(t, snapshot.UpdateLatest(redisDir, redisTS))
+
+	out := FormatSnapshotsStatus(cfg, ident, "p")
+	assert.Contains(t, out, "snapshots:")
+	// pg: success with duration + size suffix.
+	assert.Contains(t, out, "pg")
+	assert.Contains(t, out, "2026-11-16 03:00")
+	assert.Contains(t, out, "ok")
+	assert.Contains(t, out, "2.4s")
+	assert.Contains(t, out, "12.0 MiB")
+	// redis: failure with exit code; no duration/size suffix for a failed hook.
+	assert.Contains(t, out, "redis")
+	assert.Contains(t, out, "2026-11-15 03:00")
+	assert.Contains(t, out, "fail (exit 1)")
+}
+
+func TestFormatSnapshotsStatus_NeverRun(t *testing.T) {
+	ident := seedSnapshotIdent(t)
+	cfg := schema.Config{
+		Project: schema.Project{Name: "p"},
+		Snapshots: schema.OrderedMap[schema.Snapshot]{
+			Entries: map[string]schema.Snapshot{"pg": {}},
+			Order:   []string{"pg"},
+		},
+	}
+	out := FormatSnapshotsStatus(cfg, ident, "p")
+	assert.Contains(t, out, "snapshots:")
+	assert.Contains(t, out, "pg")
+	assert.Contains(t, out, "last: <never>")
+	assert.NotContains(t, out, "recent failures")
+}
+
+func TestFormatSnapshotsStatus_RecentFailuresBadge(t *testing.T) {
+	ident := seedSnapshotIdent(t)
+	cfg := schema.Config{
+		Project: schema.Project{Name: "p"},
+		Snapshots: schema.OrderedMap[schema.Snapshot]{
+			Entries: map[string]schema.Snapshot{"pg": {}},
+			Order:   []string{"pg"},
+		},
+	}
+
+	pgDir := snapshot.EntryDir(ident, "p", "pg")
+	// A successful latest archive so the main line still renders — the
+	// failures ring is independent of the newest success.
+	pgTS := snapshot.NewTimestamp(time.Now().UTC())
+	require.NoError(t, snapshot.EnsureEntryDir(ident, "p", "pg"))
+	require.NoError(t, writeTouchFile(filepath.Join(pgDir, pgTS+".zst")))
+	require.NoError(t, snapshot.WriteMeta(pgDir, pgTS, snapshot.Meta{
+		TS: pgTS, ExitCode: 0, DurationMs: 100, SizeBytes: 42,
+	}))
+	require.NoError(t, snapshot.UpdateLatest(pgDir, pgTS))
+
+	now := time.Now().UTC()
+	for i := 0; i < 3; i++ {
+		ts := snapshot.NewTimestamp(now.Add(-time.Duration(i) * time.Hour))
+		line := `{"ts":"` + ts + `","source":"cron","exit_code":1,"reason":"boom"}`
+		require.NoError(t, snapshot.AppendFailure(pgDir, line))
+	}
+
+	out := FormatSnapshotsStatus(cfg, ident, "p")
+	assert.Contains(t, out, "⚠ 3 recent failures")
+}
+
+func TestFormatSnapshotsStatus_DeclarationOrderPreserved(t *testing.T) {
+	ident := seedSnapshotIdent(t)
+	cfg := schema.Config{
+		Project: schema.Project{Name: "p"},
+		Snapshots: schema.OrderedMap[schema.Snapshot]{
+			Entries: map[string]schema.Snapshot{"z": {}, "a": {}, "m": {}},
+			Order:   []string{"z", "a", "m"},
+		},
+	}
+	out := FormatSnapshotsStatus(cfg, ident, "p")
+	// Each name appears once on its own line; find them in rendered order.
+	zIdx := strings.Index(out, "  z ")
+	aIdx := strings.Index(out, "  a ")
+	mIdx := strings.Index(out, "  m ")
+	require.NotEqual(t, -1, zIdx)
+	require.NotEqual(t, -1, aIdx)
+	require.NotEqual(t, -1, mIdx)
+	assert.Less(t, zIdx, aIdx, "z appears before a (declaration order)")
+	assert.Less(t, aIdx, mIdx, "a appears before m (declaration order)")
+}

@@ -1,0 +1,835 @@
+package serviceapi
+
+import (
+	"context"
+	"crypto/tls"
+	"fmt"
+	"net"
+	"net/http"
+	"net/http/httputil"
+	"net/url"
+	"os"
+	"strconv"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"time"
+
+	"log"
+
+	"github.com/mdubb86/devm/internal/daemonlog"
+	"github.com/mdubb86/devm/internal/helper"
+	"github.com/mdubb86/devm/internal/identity"
+	"github.com/mdubb86/devm/internal/schema"
+)
+
+// proxyErrorLogOut is where newProxyErrorLog writes; tests redirect
+// it to capture output. Defaults to os.Stderr so http.Server-produced
+// errors (panic-serving, TLS handshake failures) land in the daemon's
+// err.log alongside daemonlog.Errorf output.
+var proxyErrorLogOut = os.Stderr
+
+// newProxyErrorLog builds a *log.Logger wired into the daemon's
+// stderr sink, prefixed with the given scope so a stack of
+// per-project HTTP servers stays legible in the log ("serviceapi:
+// proxy(http everstone): …", "serviceapi: proxy(https everstone):
+// …", "serviceapi: proxy(lan): …").
+func newProxyErrorLog(scope string) *log.Logger {
+	return log.New(proxyErrorLogOut, fmt.Sprintf("serviceapi: proxy(%s): ", scope), log.LstdFlags)
+}
+
+// LANDispatchPort is the fixed port for the shared LAN dispatcher —
+// binds on 0.0.0.0 so a LAN device (or a reverse proxy like NPM on a
+// separate box) can reach devm's HTTP proxy without a per-project
+// loopback address. Not configurable in v0.9.6; a collision surfaces
+// as a bind error from /routes/apply.
+const LANDispatchPort = 42000
+
+// ProxyServer is the daemon's HTTP+HTTPS reverse proxy. Binds one
+// HTTP (:80) and one HTTPS (:443) listener per active project, on that
+// project's allocated ProjectIP, via the helper. Dispatches
+// by destination IP first (which project owns this connection), then
+// by Host: header (which route within that project) — see ServeHTTP.
+type ProxyServer struct {
+	// cfg is the daemon identity. The hairpin's SNI mux reads cfg.TLD
+	// to compute own-project and peer-project suffixes against the
+	// right zone ("test" for prod, "e2e.test" for the e2e install).
+	cfg    identity.Config
+	routes *Routes
+	ca     *CA
+	// helperClient dials this daemon's own identity's helper socket
+	// (cfg.HelperSocketPath) — never a hardcoded prod path, so an e2e
+	// daemon binds through the e2e helper, not prod's.
+	helperClient *helper.Client
+
+	// peerHairpinsForPtr backs peerHairpinsFor — the method the
+	// hairpin's SNI mux calls at connection-dispatch time to resolve a
+	// declared peer suffix (`<project>.<tld>`) to its Mac-side guest-
+	// origin HTTPS host:port. Stored under atomic.Pointer so the hairpin
+	// accept loop can read it concurrently with any swap: in production
+	// NewProxyServer stores a single closure over peersState +
+	// ironProxyState + cfg.TLD and never swaps again; tests inject
+	// per-pair maps via SetPeerHairpinsForTest. A nil Load (never
+	// stored) resolves to a nil map — same shape as "no declared
+	// peers," so the mux's fail-closed path (unrecognized SNI) fires
+	// naturally.
+	peerHairpinsForPtr atomic.Pointer[peerHairpinsFunc]
+
+	// peerHairpinsHTTPForPtr is the plain-HTTP sibling of
+	// peerHairpinsForPtr: same key shape (peer `<project>.<tld>`
+	// suffix) and same atomic-pointer discipline, but values point at
+	// each peer's GuestHTTPPort on Mac loopback. The Host-header mux
+	// in guestOriginHandler uses it when a non-own-project Host
+	// matches a declared peer and hijack-splices the connection there.
+	peerHairpinsHTTPForPtr atomic.Pointer[peerHairpinsFunc]
+
+	mu      sync.Mutex
+	perProj map[string]projectListeners
+
+	// bindLocksMu guards bindLocks, a per-project mutex map for the
+	// check+bind+record critical section in StartProjectListeners and
+	// StartGuestOriginListeners. This is deliberately NOT the same
+	// mutex as p.mu: p.mu only ever needs to be held for brief map
+	// reads/writes, while the bind itself (a helper round-trip for
+	// StartProjectListeners, a net.Listen for StartGuestOriginListeners)
+	// can be slow. Serializing that under p.mu would serialize every
+	// project's listener startup behind whichever one is mid-bind —
+	// runner.go's rebindProjectListeners deliberately fans out one
+	// goroutine per project on daemon startup and depends on different
+	// projects proceeding in parallel. A per-project lock closes the
+	// TOCTOU race (two callers for the SAME project) without imposing
+	// that cross-project serialization. Same shape as ProjectLocks in
+	// projectlock.go, but a distinct instance: that one serializes the
+	// daemon's state-mutating endpoints (start/stop/teardown/...), this
+	// one only the listener-bind critical section here.
+	bindLocksMu sync.Mutex
+	bindLocks   map[string]*sync.Mutex
+
+	// lanMu guards lanListener + lanSrv. Separate from mu because
+	// /status calls that read rebindStatus also read from ProxyServer;
+	// keeping lifecycle mutexes disjoint prevents accidental
+	// cross-contamination.
+	lanMu       sync.Mutex
+	lanListener net.Listener
+	lanSrv      *http.Server
+
+	// rebindMu guards rebindStatus. Separate from mu because the
+	// status is read from /status handlers on the request path, and
+	// holding perProj's mu across those reads would serialize them
+	// behind StartProjectListeners.
+	rebindMu     sync.Mutex
+	rebindStatus map[string]RebindStatus
+
+	// userEnvMu guards userSSHAuthSock, a path published by the CLI via
+	// POST /env/ssh-auth-sock. The CLI runs in the user's aqua session
+	// and inherits SSH_AUTH_SOCK naturally; the system-domain daemon
+	// cannot reach the aqua bootstrap (launchctl asuser needs root),
+	// so the CLI is the one who knows. Agent-bridge ServeConn reads
+	// this to dial Mac's ssh-agent.
+	userEnvMu       sync.Mutex
+	userSSHAuthSock string
+}
+
+// SetUserSSHAuthSock stores the Mac-side SSH_AUTH_SOCK path pushed by
+// the CLI. Empty path clears it. See the userEnvMu block for why this
+// must come from the CLI rather than from the daemon's own environment.
+func (p *ProxyServer) SetUserSSHAuthSock(path string) {
+	p.userEnvMu.Lock()
+	defer p.userEnvMu.Unlock()
+	p.userSSHAuthSock = path
+}
+
+// UserSSHAuthSock returns the last path published via
+// SetUserSSHAuthSock, or "" if none has been pushed.
+func (p *ProxyServer) UserSSHAuthSock() string {
+	p.userEnvMu.Lock()
+	defer p.userEnvMu.Unlock()
+	return p.userSSHAuthSock
+}
+
+// projectListeners is the pair of listeners (and their http.Servers,
+// so Shutdown can be called) bound for one project.
+type projectListeners struct {
+	http     net.Listener
+	https    net.Listener
+	httpSrv  *http.Server
+	httpsSrv *http.Server
+
+	guestHTTP      net.Listener
+	guestHTTPS     net.Listener
+	guestHTTPSrv   *http.Server
+	guestHTTPSSrv  *http.Server
+	guestHTTPPort  int
+	guestHTTPSPort int
+
+	jumpListener    net.Listener
+	jumpPort        int
+	jumpSrv         *JumpServer
+	agentBridgeLn   net.Listener
+	agentBridgePort int
+	agentBridgeSrv  *AgentBridge
+}
+
+// RebindState is one of the outcomes of the daemon-startup rebind pass
+// (runner.go's restart-adopt loop). Read by /status to surface a
+// stuck project to the user instead of silent limbo.
+type RebindState string
+
+const (
+	RebindNotAttempted RebindState = "not_attempted"
+	RebindPending      RebindState = "pending"
+	RebindOK           RebindState = "ok"
+	RebindFailed       RebindState = "failed"
+)
+
+// RebindStatus is the per-project outcome of the startup rebind pass.
+// Attempts is the number of StartProjectListeners calls made (retries
+// increment). LastError is the final error string when State ==
+// RebindFailed; empty otherwise.
+type RebindStatus struct {
+	State     RebindState
+	Attempts  int
+	LastError string
+}
+
+// peerHairpinsFunc is the signature of a peer-hairpin resolver — the
+// callback shape stored in ProxyServer.peerHairpins{,HTTP}ForPtr.
+// Named here so atomic.Pointer[peerHairpinsFunc] has a stable element
+// type across package code and tests.
+type peerHairpinsFunc func(projectID string) map[string]string
+
+func NewProxyServer(cfg identity.Config, routes *Routes, ca *CA) *ProxyServer {
+	p := &ProxyServer{
+		cfg:          cfg,
+		routes:       routes,
+		ca:           ca,
+		helperClient: helper.NewClient(cfg),
+		perProj:      make(map[string]projectListeners),
+		bindLocks:    make(map[string]*sync.Mutex),
+		rebindStatus: make(map[string]RebindStatus),
+	}
+	// Set the hairpin resolvers exactly once, at construction, so the
+	// SNI/Host mux accept loops never race a production swap. Both
+	// closures capture the daemon's live globals (peersState,
+	// ironProxyState, cfg.TLD) so a /vm/apply-iron-proxy /
+	// /vm/start / /vm/stop that mutates those is picked up without a
+	// re-store here. Tests swap via SetPeerHairpins{,HTTP}ForTest,
+	// which calls Store() — never a direct field assignment, so the
+	// atomic discipline holds across the whole package.
+	https := peerHairpinsFunc(func(projectID string) map[string]string {
+		return peersState.peerHairpinsFor(projectID, ironProxyState, cfg.TLD)
+	})
+	http := peerHairpinsFunc(func(projectID string) map[string]string {
+		return peersState.peerHairpinsHTTPFor(projectID, ironProxyState, cfg.TLD)
+	})
+	p.peerHairpinsForPtr.Store(&https)
+	p.peerHairpinsHTTPForPtr.Store(&http)
+	return p
+}
+
+// peerHairpinsFor returns the declared peer-hostname-suffix →
+// Mac-side guest-origin HTTPS host:port map for projectID at the
+// moment the hairpin dispatches a connection. Backed by
+// peerHairpinsForPtr; see that field's doc comment. A nil pointer
+// (test setup forgot to seed one, or the field was never stored)
+// surfaces as a nil map — the mux's fail-closed path reads that as
+// "no matching peer" and sends the unrecognized_name alert.
+func (p *ProxyServer) peerHairpinsFor(projectID string) map[string]string {
+	fn := p.peerHairpinsForPtr.Load()
+	if fn == nil || *fn == nil {
+		return nil
+	}
+	return (*fn)(projectID)
+}
+
+// peerHairpinsHTTPFor is the plain-HTTP sibling of peerHairpinsFor;
+// see that method and peerHairpinsHTTPForPtr for the contract.
+func (p *ProxyServer) peerHairpinsHTTPFor(projectID string) map[string]string {
+	fn := p.peerHairpinsHTTPForPtr.Load()
+	if fn == nil || *fn == nil {
+		return nil
+	}
+	return (*fn)(projectID)
+}
+
+// SetPeerHairpinsForTest overrides the HTTPS peer-hairpin resolver.
+// Test-only seam: in production the closure is set once in
+// NewProxyServer and never swapped. The underlying atomic.Pointer.Store
+// means a concurrent hairpin dispatch sees either the old or the new
+// closure, never a torn read.
+func (p *ProxyServer) SetPeerHairpinsForTest(fn peerHairpinsFunc) {
+	p.peerHairpinsForPtr.Store(&fn)
+}
+
+// SetPeerHairpinsHTTPForTest is the plain-HTTP sibling of
+// SetPeerHairpinsForTest.
+func (p *ProxyServer) SetPeerHairpinsHTTPForTest(fn peerHairpinsFunc) {
+	p.peerHairpinsHTTPForPtr.Store(&fn)
+}
+
+// lockProjectBind blocks until the calling goroutine owns the bind lock
+// for projectID and returns an unlock closure — use with defer:
+//
+//	unlock := p.lockProjectBind(projectID)
+//	defer unlock()
+//
+// Fetching (or creating) the per-project mutex is a brief bindLocksMu
+// hold; the returned lock itself may be held across slow I/O without
+// blocking any other project's caller.
+func (p *ProxyServer) lockProjectBind(projectID string) func() {
+	p.bindLocksMu.Lock()
+	m, ok := p.bindLocks[projectID]
+	if !ok {
+		m = &sync.Mutex{}
+		p.bindLocks[projectID] = m
+	}
+	p.bindLocksMu.Unlock()
+	m.Lock()
+	return m.Unlock
+}
+
+// StartProjectListeners opens :80 and :443 listeners on projectIP via
+// the helper and starts serving on them. Idempotent: a
+// project that already has listeners registered is left untouched —
+// callers should StopProjectListeners first if they want to rebind.
+//
+// The guard checks httpSrv specifically, not mere presence of a
+// perProj entry — StartGuestOriginListeners can populate that entry
+// independently (e.g. it succeeds on a retry where this call
+// previously failed), and an entry-presence check would then skip the
+// ingress bind forever.
+func (p *ProxyServer) StartProjectListeners(ctx context.Context, projectID, projectIP string) error {
+	// The per-project bind lock is held across the entire check + bind
+	// + record for THIS project: releasing it in between let two
+	// concurrent callers for the same project both pass the "already
+	// bound?" check and each bind a fresh FD pair, one of which never
+	// made it into perProj and leaked (goroutines + FDs) until process
+	// exit. It's per-project rather than p.mu itself so an unrelated
+	// project's StartProjectListeners/StartGuestOriginListeners call
+	// isn't serialized behind this one's helper round-trip — see
+	// bindLocks's doc comment.
+	unlock := p.lockProjectBind(projectID)
+	defer unlock()
+
+	p.mu.Lock()
+	pl, ok := p.perProj[projectID]
+	p.mu.Unlock()
+	if ok && pl.httpSrv != nil {
+		return nil
+	}
+
+	httpLn, err := p.helperClient.BindTCP(projectIP, 80)
+	if err != nil {
+		return fmt.Errorf("bind :80 on %s: %w", projectIP, err)
+	}
+	httpsLn, err := p.helperClient.BindTCP(projectIP, 443)
+	if err != nil {
+		httpLn.Close()
+		return fmt.Errorf("bind :443 on %s: %w", projectIP, err)
+	}
+
+	httpSrv := &http.Server{
+		Handler:     p,
+		ConnContext: p.stampLocalAddr,
+		// Route http.Server's own errors — panic-serving traces, TLS
+		// handshake failures, unexpected handler behavior — to stderr
+		// so they land in the err.log alongside daemonlog.Errorf. The
+		// default logger goes through stdlib log, which the daemon
+		// routes to stdout; a panic in one of these handlers would
+		// otherwise vanish into the info stream.
+		ErrorLog: newProxyErrorLog("http " + projectID),
+	}
+	httpsSrv := &http.Server{
+		Handler:     p,
+		ConnContext: p.stampLocalAddr,
+		TLSConfig: &tls.Config{
+			GetCertificate: p.ca.GetCertificate,
+			NextProtos:     []string{"h2", "http/1.1"},
+		},
+		ErrorLog: newProxyErrorLog("https " + projectID),
+	}
+
+	// Serve-loop errors go to unconditional stderr, not debuglog: a
+	// silent Serve() exit for one project's listener leaves the FD bound
+	// (helper owns the socket) but nothing accepting — clients see raw
+	// RSTs with no daemon-side breadcrumb. Prod runs without DEVM_DEBUG,
+	// so a debuglog-only line would vanish. See buzztrack :80 outage,
+	// 2026-08-12: RST-on-first-byte with no daemon log to correlate.
+	log.Printf("serviceapi: proxy: HTTP listening on %s (project %s)", httpLn.Addr(), projectID)
+	go func() {
+		if err := httpSrv.Serve(httpLn); err != nil && err != http.ErrServerClosed {
+			daemonlog.Errorf("serviceapi: proxy HTTP serve for %s exited: %v", projectID, err)
+		}
+	}()
+	log.Printf("serviceapi: proxy: HTTPS listening on %s (project %s)", httpsLn.Addr(), projectID)
+	go func() {
+		if err := httpsSrv.ServeTLS(httpsLn, "", ""); err != nil && err != http.ErrServerClosed {
+			daemonlog.Errorf("serviceapi: proxy HTTPS serve for %s exited: %v", projectID, err)
+		}
+	}()
+
+	// Re-read the current entry rather than reusing the pl checked
+	// above: StartGuestOriginListeners shares this same bindLocks
+	// entry, so it can't run for this project while we hold it, but
+	// re-reading immediately before the merge (instead of trusting a
+	// pl captured before the bind) keeps this resilient to any future
+	// caller of perProj that doesn't go through bindLocks.
+	p.mu.Lock()
+	pl = p.perProj[projectID]
+	pl.http = httpLn
+	pl.https = httpsLn
+	pl.httpSrv = httpSrv
+	pl.httpsSrv = httpsSrv
+	p.perProj[projectID] = pl
+	p.mu.Unlock()
+	return nil
+}
+
+// StopProjectListeners closes the given project's HTTP/HTTPS listeners
+// (if any). Idempotent — a project with no registered listeners is a
+// no-op.
+//
+// Deliberately asymmetric with Start*Listeners above: Stop keeps I/O
+// (the Shutdown calls below) outside p.mu. The map delete via
+// takeProjectListeners is the load-bearing critical section — once a
+// project's entry is taken, no other caller can observe or re-take it —
+// and Shutdown blocking under a lock would let a slow-draining
+// connection stall unrelated map reads/writes for every other project.
+func (p *ProxyServer) StopProjectListeners(projectID string) {
+	pl, ok := p.takeProjectListeners(projectID)
+
+	// Clear the recorded rebind outcome unconditionally (even when
+	// there were no live listeners to shut down — a rebind can fail
+	// before ever populating perProj) so a torn-down project doesn't
+	// leak forever in rebindStatus and a later /status read doesn't
+	// report a stale RebindOK/RebindFailed for a project that no
+	// longer exists.
+	p.rebindMu.Lock()
+	delete(p.rebindStatus, projectID)
+	p.rebindMu.Unlock()
+
+	// Deliberately do NOT delete p.bindLocks[projectID] here. The mutex
+	// is the rendezvous that serializes Start* calls for THIS project;
+	// deleting it while a slow Start* still holds it means the next
+	// Start* creates a fresh mutex, and the two callers stop excluding
+	// each other — the exact leak Task 1 closed. Concrete sequence:
+	//
+	//   1. rebindProjectListeners goroutine calls StartProjectListeners,
+	//      creates M1, locks it, waits on the helper's BindTCP.
+	//   2. /vm/stop takes its per-project reconcile lock, calls
+	//      StopProjectListeners (this function), a delete here would
+	//      remove M1 while (1) still holds it.
+	//   3. /vm/start takes the reconcile lock next, calls
+	//      StartProjectListeners; lockProjectBind sees no entry, creates
+	//      M2, locks M2.
+	//   4. (1) and (3) now bind :80/:443 for the same project in
+	//      parallel — the exact duplicate-listener leak the map exists
+	//      to prevent.
+	//
+	// The map is one *sync.Mutex per project name ever attempted, on a
+	// single-user tool with a handful of projects. Memory footprint is
+	// trivial; the correctness of the mutual exclusion is not.
+
+	if !ok {
+		return
+	}
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if pl.httpSrv != nil {
+		_ = pl.httpSrv.Shutdown(shutdownCtx)
+	}
+	if pl.httpsSrv != nil {
+		_ = pl.httpsSrv.Shutdown(shutdownCtx)
+	}
+	// Shut down via the *http.Server when one was recorded — Shutdown
+	// closes the listener it's serving on. Fall back to closing the raw
+	// listener directly when it isn't: guestHTTP/guestHTTPS are recorded
+	// at bind time, before the *http.Server goroutine's Serve call is
+	// even known to have started, so a listener can be present here with
+	// no server ever having been recorded for it. Without this fallback
+	// that fd would never close.
+	if pl.guestHTTPSrv != nil {
+		_ = pl.guestHTTPSrv.Shutdown(shutdownCtx)
+	} else if pl.guestHTTP != nil {
+		_ = pl.guestHTTP.Close()
+	}
+	// guestHTTPS carries the hairpin's SNI mux, whose accept loop
+	// drives http.Server.Serve on short-lived one-shot listeners per
+	// own-project connection rather than calling httpsSrv.ServeTLS on
+	// the long-lived listener. httpsSrv therefore never owns the raw
+	// listener; closing it here is what unblocks the accept loop and
+	// releases the port — not Shutdown. Shutdown is still called when
+	// an *http.Server is recorded (so a future refactor that does
+	// Serve on the raw listener drains gracefully), but the raw Close
+	// is the load-bearing step.
+	if pl.guestHTTPSSrv != nil {
+		_ = pl.guestHTTPSSrv.Shutdown(shutdownCtx)
+	}
+	if pl.guestHTTPS != nil {
+		_ = pl.guestHTTPS.Close()
+	}
+}
+
+// StopAll closes every project's listeners. Called on daemon shutdown
+// so a graceful exit doesn't leak bound ports.
+func (p *ProxyServer) StopAll() {
+	p.mu.Lock()
+	ids := make([]string, 0, len(p.perProj))
+	for id := range p.perProj {
+		ids = append(ids, id)
+	}
+	p.mu.Unlock()
+	for _, id := range ids {
+		p.StopProjectListeners(id)
+	}
+}
+
+func (p *ProxyServer) takeProjectListeners(projectID string) (projectListeners, bool) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	pl, ok := p.perProj[projectID]
+	if ok {
+		delete(p.perProj, projectID)
+	}
+	return pl, ok
+}
+
+// RecordRebindStatus stores the outcome of the startup rebind pass
+// for projectID. Called by the runner's rebind loop; read by /status.
+func (p *ProxyServer) RecordRebindStatus(projectID string, s RebindStatus) {
+	p.rebindMu.Lock()
+	defer p.rebindMu.Unlock()
+	p.rebindStatus[projectID] = s
+}
+
+// RebindStatus returns the recorded outcome for projectID. The second
+// return is false when no rebind was attempted (e.g. the project
+// wasn't recovered by AdoptIronProxies).
+func (p *ProxyServer) RebindStatus(projectID string) (RebindStatus, bool) {
+	p.rebindMu.Lock()
+	defer p.rebindMu.Unlock()
+	s, ok := p.rebindStatus[projectID]
+	return s, ok
+}
+
+type ctxKey int
+
+const (
+	ctxKeyLocalAddr ctxKey = iota
+)
+
+// stampLocalAddr is the http.Server ConnContext hook: it stamps the
+// accepted connection's local address (the project IP the client
+// dialed) into the request context so ServeHTTP can dispatch by
+// destination IP.
+func (p *ProxyServer) stampLocalAddr(ctx context.Context, c net.Conn) context.Context {
+	return context.WithValue(ctx, ctxKeyLocalAddr, c.LocalAddr())
+}
+
+func localAddrFromCtx(ctx context.Context) (net.IP, bool) {
+	v := ctx.Value(ctxKeyLocalAddr)
+	if v == nil {
+		return nil, false
+	}
+	if ta, ok := v.(*net.TCPAddr); ok {
+		return ta.IP, true
+	}
+	return nil, false
+}
+
+// ServeHTTP dispatches by destination IP first (which project owns
+// this connection), then by Host: header (which route within that
+// project). A Host that doesn't belong to the dest-IP's project is a
+// 502, never a fall-through to another project — this is the
+// isolation guarantee.
+//
+// Every branch logs its outcome. The daemon proxy is low-volume (only
+// Mac-side .test hostname access), so unconditional per-request logs
+// are the right tradeoff: silent RSTs and 502-no-route mysteries have
+// wasted enough diagnostic time already.
+func (p *ProxyServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	host := stripPort(r.Host)
+	ip, ok := localAddrFromCtx(r.Context())
+	if !ok {
+		log.Printf("serviceapi: proxy: 502 no-local-addr host=%s method=%s path=%s", host, r.Method, r.URL.Path)
+		write502NoRoute(w, r.Host)
+		return
+	}
+	project := projectByIP(ip.String())
+	if project == "" {
+		log.Printf("serviceapi: proxy: 502 no-project ip=%s host=%s method=%s path=%s", ip, host, r.Method, r.URL.Path)
+		write502NoProject(w, ip.String())
+		return
+	}
+	route, ok := p.routes.Lookup(host, project)
+	if !ok {
+		log.Printf("serviceapi: proxy: 502 no-route project=%s host=%s method=%s path=%s", project, host, r.Method, r.URL.Path)
+		write502NoRoute(w, host)
+		return
+	}
+	log.Printf("serviceapi: proxy: %s %s %s%s -> %s:%d", project, r.Method, host, r.URL.Path, backendHostOr(route), route.BackendPort)
+	p.dispatch(w, r, route)
+}
+
+// dispatch is the shared reverse-proxy mechanics — dial the route's
+// backend and copy the response — factored out of ServeHTTP so
+// serveLAN (LAN dispatch, Host-header only, no per-project dest-IP
+// scope) can reuse it instead of duplicating the reverse-proxy setup.
+func (p *ProxyServer) dispatch(w http.ResponseWriter, r *http.Request, route Route) {
+	host := stripPort(r.Host)
+	backendHost := backendHostOr(route)
+	target, _ := url.Parse(fmt.Sprintf("http://%s:%d", backendHost, route.BackendPort))
+	rev := httputil.NewSingleHostReverseProxy(target)
+	rev.ErrorHandler = func(w http.ResponseWriter, r *http.Request, err error) {
+		// Backend dial/copy failed. Log with the error string so a
+		// silent "site can't be reached" leaves a breadcrumb naming
+		// the backend it couldn't reach.
+		log.Printf("serviceapi: proxy: 502 backend-down host=%s backend=%s:%d: %v", host, backendHost, route.BackendPort, err)
+		write502BackendDown(w, host, backendHost, route.BackendPort, err)
+	}
+	rev.ServeHTTP(w, r)
+}
+
+// backendHostOr returns the route's backend host, defaulting to
+// "localhost" when unset. Shared between the log-line and the URL
+// build so both stay in sync.
+func backendHostOr(route Route) string {
+	if route.BackendHost == "" {
+		return "localhost"
+	}
+	return route.BackendHost
+}
+
+// StartLANListener binds 0.0.0.0:lanPort and starts serving the shared
+// LAN dispatcher. Idempotent — a second call while already bound
+// returns nil. Called by reconcileLAN when the first ExposeHost route
+// enters the table.
+func (p *ProxyServer) StartLANListener(ctx context.Context, lanPort int) error {
+	p.lanMu.Lock()
+	defer p.lanMu.Unlock()
+	if p.lanListener != nil {
+		return nil
+	}
+	ln, err := net.Listen("tcp", fmt.Sprintf("0.0.0.0:%d", lanPort))
+	if err != nil {
+		return fmt.Errorf("bind LAN listener :%d: %w", lanPort, err)
+	}
+	srv := &http.Server{
+		Handler:  http.HandlerFunc(p.serveLAN),
+		ErrorLog: newProxyErrorLog("lan"),
+	}
+	p.lanListener = ln
+	p.lanSrv = srv
+	go func() {
+		if err := srv.Serve(ln); err != nil && err != http.ErrServerClosed {
+			daemonlog.Errorf("serviceapi: LAN listener serve exited: %v", err)
+		}
+	}()
+	log.Printf("serviceapi: LAN listener bound on 0.0.0.0:%d", lanPort)
+	return nil
+}
+
+// StopLANListener closes the LAN listener. Idempotent — a second call
+// when not bound is a no-op. Called when the last ExposeHost route
+// leaves the table.
+func (p *ProxyServer) StopLANListener() {
+	p.lanMu.Lock()
+	defer p.lanMu.Unlock()
+	if p.lanSrv == nil {
+		return
+	}
+	_ = p.lanSrv.Shutdown(context.Background())
+	p.lanListener = nil
+	p.lanSrv = nil
+}
+
+// serveLAN dispatches a LAN request by Host header only — no
+// per-project dest-IP scope filter, since the destination IP here is
+// the Mac's shared LAN interface, not a per-project loopback address.
+func (p *ProxyServer) serveLAN(w http.ResponseWriter, r *http.Request) {
+	host := stripPort(r.Host)
+	route, ok := p.routes.LANLookup(host)
+	if !ok {
+		log.Printf("serviceapi: proxy(lan): 502 no-route host=%s method=%s path=%s", host, r.Method, r.URL.Path)
+		write502NoRoute(w, host)
+		return
+	}
+	log.Printf("serviceapi: proxy(lan): %s %s%s -> %s:%d", r.Method, host, r.URL.Path, backendHostOr(route), route.BackendPort)
+	p.dispatch(w, r, route)
+}
+
+// projectByIP reverse-maps an IP string to the projectID that owns it.
+// Reads ironProxyState. Returns "" when no project claims the IP.
+func projectByIP(ip string) string {
+	for _, id := range ironProxyState.keys() {
+		if info, ok := ironProxyState.get(id); ok && info.ProjectIP == ip {
+			return id
+		}
+	}
+	return ""
+}
+
+func write502NoRoute(w http.ResponseWriter, host string) {
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.WriteHeader(http.StatusBadGateway)
+	fmt.Fprintf(w, "devm: no route configured for %s\n\n", host)
+	// `files.<project>.<tld>` is reserved for the bundled filestash
+	// service — the daemon registers it automatically at /vm/start,
+	// so a bare "no route" for a files.* host almost always means
+	// the project is stopped (or was just torn down). Steer users
+	// there rather than at a devm.yaml edit that would collide with
+	// the reserved route.
+	if strings.HasPrefix(host, "files.") {
+		fmt.Fprintf(w, "`files.<project>.<tld>` is reserved for the bundled filestash\n")
+		fmt.Fprintf(w, "service — the daemon registers it automatically at /vm/start.\n")
+		fmt.Fprintf(w, "If you see this error, the project is likely stopped:\n")
+		fmt.Fprintf(w, "  - run `devm start` in the project directory\n")
+		return
+	}
+	fmt.Fprintf(w, "to add one:\n")
+	fmt.Fprintf(w, "  - declare service.hostname: %s in devm.yaml\n", host)
+	fmt.Fprintf(w, "  - run `devm route local` or `devm route vm`\n")
+}
+
+func write502NoProject(w http.ResponseWriter, ip string) {
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.WriteHeader(http.StatusBadGateway)
+	fmt.Fprintf(w, "devm: no project bound at %s\n\ndid a project just get torn down?\n", ip)
+}
+
+func write502BackendDown(w http.ResponseWriter, host, backendHost string, port int, err error) {
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.WriteHeader(http.StatusBadGateway)
+	fmt.Fprintf(w, "devm: no service listening at %s → %s:%s\n\n",
+		host, backendHost, strconv.Itoa(port))
+	fmt.Fprintf(w, "is your dev server running?\n")
+	fmt.Fprintf(w, "  vm mode:    `devm start` to bring the sandbox up\n")
+	fmt.Fprintf(w, "  local mode: start the process this hostname targets\n\n")
+	fmt.Fprintf(w, "(%v)\n", err)
+}
+
+// ProjectSnapshotInfo is the read-only view of this project's
+// jump/bridge port assignment, consumed by softnet when rebuilding
+// the guest's iptables snapshot.
+type ProjectSnapshotInfo struct {
+	JumpPort   int
+	BridgePort int
+}
+
+// ProjectSnapshot returns the current jump/bridge ports for projectID.
+// Zero values when no SSH-jump listeners are bound.
+func (p *ProxyServer) ProjectSnapshot(projectID string) ProjectSnapshotInfo {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	pl := p.perProj[projectID]
+	return ProjectSnapshotInfo{JumpPort: pl.jumpPort, BridgePort: pl.agentBridgePort}
+}
+
+// StartSSHJumpListeners binds this project's devm-jump + agent-bridge
+// listeners on Mac loopback. Reuses the ProxyServer.bindLocksMu
+// per-project lock so a retried /vm/start can't orphan listeners (same
+// pattern as StartProjectListeners and StartGuestOriginListeners —
+// see those for the full rationale).
+//
+// Idempotent: a repeat call for a project whose listeners are already
+// bound returns the existing ports without rebinding.
+func (p *ProxyServer) StartSSHJumpListeners(
+	ctx context.Context,
+	projectID, runtimeDir string,
+	targets []schema.ResolvedSSHTarget,
+) (jumpPort, bridgePort int, err error) {
+	unlock := p.lockProjectBind(projectID)
+	defer unlock()
+
+	p.mu.Lock()
+	pl, ok := p.perProj[projectID]
+	p.mu.Unlock()
+	if ok && pl.jumpListener != nil {
+		return pl.jumpPort, pl.agentBridgePort, nil
+	}
+
+	hostKey, err := LoadOrCreateJumpHostKey(runtimeDir)
+	if err != nil {
+		return 0, 0, fmt.Errorf("sshjump host key: %w", err)
+	}
+	_, clientPub, err := LoadOrCreateProjectJumpKey(runtimeDir, projectID)
+	if err != nil {
+		return 0, 0, fmt.Errorf("sshjump client key: %w", err)
+	}
+	allow := NewJumpAllowlist(targets)
+	js := NewJumpServer(hostKey, clientPub, allow, projectID)
+	jumpLn, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		return 0, 0, fmt.Errorf("bind sshjump: %w", err)
+	}
+
+	bridge := NewAgentBridge(projectID, ProxySSHAuthSockResolver(p))
+	bridgeLn, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		jumpLn.Close()
+		return 0, 0, fmt.Errorf("bind agentbridge: %w", err)
+	}
+
+	go func() {
+		for {
+			c, err := jumpLn.Accept()
+			if err != nil {
+				return
+			}
+			go js.ServeConn(c)
+		}
+	}()
+	go func() {
+		for {
+			c, err := bridgeLn.Accept()
+			if err != nil {
+				return
+			}
+			go bridge.ServeConn(c)
+		}
+	}()
+
+	p.mu.Lock()
+	pl = p.perProj[projectID]
+	pl.jumpListener = jumpLn
+	pl.jumpPort = jumpLn.Addr().(*net.TCPAddr).Port
+	pl.jumpSrv = js
+	pl.agentBridgeLn = bridgeLn
+	pl.agentBridgePort = bridgeLn.Addr().(*net.TCPAddr).Port
+	pl.agentBridgeSrv = bridge
+	p.perProj[projectID] = pl
+	p.mu.Unlock()
+
+	log.Printf("serviceapi: sshjump listening on %s, agent-bridge on %s (project %s)",
+		jumpLn.Addr(), bridgeLn.Addr(), projectID)
+	return pl.jumpPort, pl.agentBridgePort, nil
+}
+
+// StopSSHJumpListeners closes the devm-jump + agent-bridge listeners
+// for this project. Idempotent.
+func (p *ProxyServer) StopSSHJumpListeners(projectID string) {
+	unlock := p.lockProjectBind(projectID)
+	defer unlock()
+	p.mu.Lock()
+	pl, ok := p.perProj[projectID]
+	if !ok {
+		p.mu.Unlock()
+		return
+	}
+	jumpLn := pl.jumpListener
+	bridgeLn := pl.agentBridgeLn
+	pl.jumpListener = nil
+	pl.jumpPort = 0
+	pl.jumpSrv = nil
+	pl.agentBridgeLn = nil
+	pl.agentBridgePort = 0
+	pl.agentBridgeSrv = nil
+	p.perProj[projectID] = pl
+	p.mu.Unlock()
+	if jumpLn != nil {
+		_ = jumpLn.Close()
+	}
+	if bridgeLn != nil {
+		_ = bridgeLn.Close()
+	}
+}

@@ -1,0 +1,967 @@
+package devmbundle
+
+import (
+	"archive/tar"
+	"bytes"
+	"io"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"github.com/mdubb86/devm/internal/render"
+	"github.com/mdubb86/devm/internal/schema"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+)
+
+func TestBuild_ContainsExpectedFilesWithModes(t *testing.T) {
+	cfg := schema.Config{
+		Project: schema.Project{Name: "p"},
+		Env: map[string]schema.EnvValue{
+			"FOO": {Literal: "bar"},
+		},
+	}
+	body, err := Build(BuildInput{MutagenVersion: "0.18.1", Cfg: cfg, RepoRoot: "/tmp/repo", SizingConf: []byte("swap=50%\nbuild_cache=15%\n")})
+	require.NoError(t, err)
+
+	entries := readTar(t, body)
+	want := map[string]int64{
+		"etc/environment":              0o644,
+		"scripts/with-devm-env":        0o755,
+		"scripts/install-templates.sh": 0o755,
+		"install.sh":                   0o755,
+	}
+	for path, mode := range want {
+		e, ok := entries[path]
+		require.True(t, ok, "bundle missing %s", path)
+		assert.Equal(t, mode, e.mode&0o777, "%s mode", path)
+		assert.Equal(t, int64(0), e.uid, "%s uid", path)
+		assert.Equal(t, int64(0), e.gid, "%s gid", path)
+	}
+}
+
+// TestBuild_DoesNotIncludeGuestMd guards that the bundle no longer
+// ships /opt/devm/GUEST.md — that content now lives under the
+// tool/ai/claude recipe assets and reaches guests via the recipe
+// asset flow, not the daemon-side bundle.
+func TestBuild_DoesNotIncludeGuestMd(t *testing.T) {
+	cfg := schema.Config{Project: schema.Project{Name: "p"}}
+	body, err := Build(BuildInput{MutagenVersion: "0.18.1", Cfg: cfg, RepoRoot: "/tmp/repo", SizingConf: []byte("swap=50%\nbuild_cache=15%\n")})
+	require.NoError(t, err)
+
+	entries := readTar(t, body)
+	_, ok := entries["GUEST.md"]
+	assert.False(t, ok, "bundle must not ship GUEST.md — content moved to tool/ai/claude recipe assets")
+}
+
+// TestBuild_InstallScriptSeedsNSSTrust pins that install.sh in the
+// bundle seeds the devm user's per-user NSS db with the devm CA.
+// Chromium (Debian's package AND Playwright's Chrome-for-Testing)
+// reads $HOME/.pki/nssdb and does NOT fall through to /etc/pki/nssdb
+// when the per-user db exists but lacks the cert. A regression that
+// dropped this seed would silently break every browser in the guest
+// against .test hostnames and every iron-proxy-MITM'd HTTPS site.
+func TestBuild_InstallScriptSeedsNSSTrust(t *testing.T) {
+	cfg := schema.Config{Project: schema.Project{Name: "p"}}
+	body, err := Build(BuildInput{MutagenVersion: "0.18.1", Cfg: cfg, RepoRoot: "/tmp/repo", SizingConf: []byte("swap=50%\nbuild_cache=15%\n")})
+	require.NoError(t, err)
+
+	entries := readTar(t, body)
+	e, ok := entries["install.sh"]
+	require.True(t, ok, "bundle missing install.sh")
+	script := string(e.body)
+	// The seed must run as the devm user so $HOME resolves to
+	// /home/devm and files land with correct ownership. install.sh
+	// itself runs as root via `sudo /opt/devm/install.sh`.
+	assert.Contains(t, script, "su - devm -c",
+		"install.sh must run the NSS seed in the devm user's context")
+	assert.Contains(t, script, `certutil -A -n devm -t "C,,"`,
+		"install.sh must seed the devm CA into the per-user NSS db")
+	assert.Contains(t, script, `sql:"$HOME/.pki/nssdb"`,
+		"install.sh must target the per-user NSS trust db path ($HOME/.pki/nssdb)")
+	// The per-user db must NOT be world-readable — 0700/0600. Prod
+	// docs suggest tight perms for user-scoped NSS stores; the store
+	// holds only a public CA cert today but the mode should match
+	// $HOME convention.
+	assert.Contains(t, script, `chmod 700 "$HOME/.pki" "$HOME/.pki/nssdb"`,
+		"install.sh must chmod the NSS dir 0700")
+}
+
+// TestBuild_InstallScriptDropsFirefoxPoliciesJSON pins that install.sh
+// writes /etc/firefox/policies/policies.json with a SecurityDevices
+// entry pointing at p11-kit-trust.so — the bridge that lets Firefox
+// (and Firefox-derived browsers like Camoufox, once symlinked) trust
+// the system CA store transparently, without per-profile certutil
+// dances. Without this drop-in, Firefox uses its own bundled NSS with
+// only Mozilla's root set, and iron-proxy-MITM'd HTTPS shows
+// SEC_ERROR_UNKNOWN_ISSUER.
+func TestBuild_InstallScriptDropsFirefoxPoliciesJSON(t *testing.T) {
+	cfg := schema.Config{Project: schema.Project{Name: "p"}}
+	body, err := Build(BuildInput{MutagenVersion: "0.18.1", Cfg: cfg, RepoRoot: "/tmp/repo", SizingConf: []byte("swap=50%\nbuild_cache=15%\n")})
+	require.NoError(t, err)
+
+	entries := readTar(t, body)
+	e, ok := entries["install.sh"]
+	require.True(t, ok, "bundle missing install.sh")
+	script := string(e.body)
+
+	assert.Contains(t, script, "/etc/firefox/policies/policies.json",
+		"install.sh must write the Firefox enterprise-policy file at the canonical Linux path")
+	assert.Contains(t, script, "SecurityDevices",
+		"install.sh must set the SecurityDevices policy so Firefox loads a PKCS#11 module")
+	assert.Contains(t, script, "p11-kit-trust.so",
+		"install.sh must point SecurityDevices at p11-kit-trust.so — the NSS module that bridges the system CA store into Firefox")
+}
+
+func TestBuild_EnvReflectsConfig(t *testing.T) {
+	cfg := schema.Config{
+		Project: schema.Project{Name: "p"},
+		Env: map[string]schema.EnvValue{
+			"MYVAR": {Literal: "myval"},
+		},
+	}
+	body, err := Build(BuildInput{MutagenVersion: "0.18.1", Cfg: cfg, RepoRoot: "/tmp/repo", SizingConf: []byte("swap=50%\nbuild_cache=15%\n")})
+	require.NoError(t, err)
+
+	entries := readTar(t, body)
+	envBody := string(entries["etc/environment"].body)
+	assert.Contains(t, envBody, "MYVAR")
+	assert.Contains(t, envBody, "myval")
+}
+
+func TestBuild_Deterministic(t *testing.T) {
+	// Two builds of the same cfg must produce byte-identical tars —
+	// required so future callers can gate re-pipe on content hash
+	// without spurious drift.
+	cfg := schema.Config{Project: schema.Project{Name: "p"}}
+	a, err := Build(BuildInput{MutagenVersion: "0.18.1", Cfg: cfg, RepoRoot: "/tmp/repo", SizingConf: []byte("swap=50%\nbuild_cache=15%\n")})
+	require.NoError(t, err)
+	b, err := Build(BuildInput{MutagenVersion: "0.18.1", Cfg: cfg, RepoRoot: "/tmp/repo", SizingConf: []byte("swap=50%\nbuild_cache=15%\n")})
+	require.NoError(t, err)
+	assert.Equal(t, a, b)
+}
+
+func TestBuild_TemplatePathsAreFlatBaseNames(t *testing.T) {
+	// RenderTemplates returns a map keyed by absolute paths under the
+	// daemon runtime dir (<daemonRuntimeDir>/templates/<project>/
+	// NN-svc-base.sh); Build must reduce them to a flat basename so the
+	// guest's install-templates.sh dispatcher (which iterates
+	// templates/*.sh non-recursively) can
+	// find them. Regression: an earlier revision embedded the full
+	// host path into the tar entry name and silently broke the whole
+	// templates flow.
+	repoRoot := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(repoRoot, "tmpl"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(repoRoot, "tmpl", "nginx.conf"), []byte("hello {{.Project.Name}}"), 0o644))
+
+	cfg := schema.Config{
+		Project: schema.Project{Name: "p"},
+		Services: schema.OrderedMapOf(map[string]schema.Service{
+			"web": {
+				Templates: []schema.Template{{
+					Source: "tmpl/nginx.conf",
+					Output: "/etc/nginx/nginx.conf",
+				}},
+			},
+		}),
+	}
+	body, err := Build(BuildInput{MutagenVersion: "0.18.1", Cfg: cfg, RepoRoot: repoRoot, SizingConf: []byte("swap=50%\nbuild_cache=15%\n")})
+	require.NoError(t, err)
+
+	entries := readTar(t, body)
+	found := false
+	for name := range entries {
+		if !strings.HasPrefix(name, "templates/") {
+			continue
+		}
+		found = true
+		rest := name[len("templates/"):]
+		require.Falsef(t, strings.Contains(rest, "/"),
+			"template entry name must be a flat basename, got %q", name)
+	}
+	require.True(t, found, "expected at least one templates/ entry in the bundle")
+}
+
+type tarEntry struct {
+	mode int64
+	uid  int64
+	gid  int64
+	body []byte
+}
+
+func TestBuild_TakesBuildInput_Compat(t *testing.T) {
+	// Same inputs as the old (cfg, repoRoot) form should yield the same tar.
+	cfg := schema.Config{Project: schema.Project{Name: "p"}}
+	in := BuildInput{MutagenVersion: "0.18.1", Cfg: cfg, RepoRoot: "/tmp/repo", SizingConf: []byte("swap=50%\nbuild_cache=15%\n")}
+	got, err := Build(in)
+	require.NoError(t, err)
+	require.NotEmpty(t, got)
+	// Assert the tar has the pre-existing entries and no new junk yet.
+	names := tarEntryNames(t, got)
+	assert.Contains(t, names, "etc/environment")
+	assert.Contains(t, names, "install.sh")
+	assert.Contains(t, names, "scripts/with-devm-env")
+}
+
+// tarEntryNames helper — reuse or add:
+func tarEntryNames(t *testing.T, blob []byte) []string {
+	t.Helper()
+	tr := tar.NewReader(bytes.NewReader(blob))
+	var out []string
+	for {
+		h, err := tr.Next()
+		if err == io.EOF {
+			break
+		}
+		require.NoError(t, err)
+		out = append(out, h.Name)
+	}
+	return out
+}
+
+func TestBuild_TarContainsCA(t *testing.T) {
+	in := BuildInput{
+		Cfg:            schema.Config{Project: schema.Project{Name: "p"}},
+		RepoRoot:       "/tmp/repo",
+		MutagenVersion: "0.18.1",
+		CARootPEM:      []byte("-----BEGIN CERTIFICATE-----\nDUMMYDATA\n-----END CERTIFICATE-----\n"),
+		SizingConf:     []byte("swap=50%\nbuild_cache=15%\n"),
+	}
+	blob, err := Build(in)
+	require.NoError(t, err)
+
+	body := readTarEntry(t, blob, "ca/devm.crt")
+	assert.Equal(t, string(in.CARootPEM), string(body))
+}
+
+// readTarEntry helper — reuse or add:
+func readTarEntry(t *testing.T, blob []byte, name string) []byte {
+	t.Helper()
+	tr := tar.NewReader(bytes.NewReader(blob))
+	for {
+		h, err := tr.Next()
+		if err == io.EOF {
+			break
+		}
+		require.NoError(t, err)
+		if h.Name == name {
+			data, err := io.ReadAll(tr)
+			require.NoError(t, err)
+			return data
+		}
+	}
+	t.Fatalf("entry %q not found in tar", name)
+	return nil
+}
+
+// TestBuild_TarHasNoCaddy pins Caddy's removal: `.test` routing is the
+// daemon's guest-origin listener, so no Caddyfile should ever enter the
+// bundle.
+func TestBuild_TarHasNoCaddy(t *testing.T) {
+	cfg := schema.Config{Services: schema.OrderedMapOf(map[string]schema.Service{
+		"api": {Hostname: "api.test", Port: 3000},
+	})}
+	b, err := Build(BuildInput{MutagenVersion: "0.18.1", Cfg: cfg, SizingConf: []byte("swap=50%\nbuild_cache=15%\n")})
+	if err != nil {
+		t.Fatalf("build: %v", err)
+	}
+	for _, name := range tarEntryNames(t, b) {
+		if strings.Contains(name, "caddy") {
+			t.Fatalf("bundle still carries a caddy entry: %s", name)
+		}
+	}
+}
+
+func TestBuild_TarContainsDnsmasqDropIn(t *testing.T) {
+	blob, err := Build(BuildInput{
+		Cfg:            schema.Config{Project: schema.Project{Name: "p"}},
+		RepoRoot:       "/tmp/repo",
+		MutagenVersion: "0.18.1",
+		SizingConf:     []byte("swap=50%\nbuild_cache=15%\n"),
+	})
+	require.NoError(t, err)
+	body := readTarEntry(t, blob, "dnsmasq/devm-test.conf")
+	assert.NotEmpty(t, body)
+}
+
+// TestBuild_TarContainsGdevmServeUnit pins that gdevm-serve.service
+// ships in every bundle unconditionally — no Cfg.Services entry
+// required (a repo-less project still gets it) and no Gdevm binary
+// bytes required (mirrors production, where BuildInputFor always
+// sets Gdevm, but the unit itself doesn't depend on that field).
+func TestBuild_TarContainsGdevmServeUnit(t *testing.T) {
+	blob, err := Build(BuildInput{
+		Cfg:            schema.Config{Project: schema.Project{Name: "p"}},
+		RepoRoot:       "/tmp/repo",
+		MutagenVersion: "0.18.1",
+		SizingConf:     []byte("swap=50%\nbuild_cache=15%\n"),
+	})
+	require.NoError(t, err)
+	unit := readTarEntry(t, blob, "systemd/gdevm-serve.service")
+	assert.Contains(t, string(unit), "ExecStart=/usr/local/bin/gdevm serve")
+	assert.Contains(t, string(unit), "WantedBy=multi-user.target")
+}
+
+// TestBuild_PropagatesTLDIntoGdevmServeUnit pins that Build hands
+// BuildInput.TLD to the gdevm-serve unit renderer.
+func TestBuild_PropagatesTLDIntoGdevmServeUnit(t *testing.T) {
+	blob, err := Build(BuildInput{
+		Cfg:            schema.Config{Project: schema.Project{Name: "p"}},
+		RepoRoot:       "/tmp/repo",
+		MutagenVersion: "0.18.1",
+		TLD:            "e2e.test",
+		SizingConf:     []byte("swap=50%\nbuild_cache=15%\n"),
+	})
+	require.NoError(t, err)
+	unit := readTarEntry(t, blob, "systemd/gdevm-serve.service")
+	assert.Contains(t, string(unit), "Environment=DEVM_TLD=e2e.test")
+}
+
+func TestBuild_TarContainsServiceUnits(t *testing.T) {
+	cfg := schema.Config{
+		Project: schema.Project{Name: "p"},
+		Services: schema.OrderedMapOf(map[string]schema.Service{
+			"web":     {ExecArgv: []string{"/bin/true"}, Hostname: "w.local", Port: 80},
+			"routing": {Hostname: "r.local", Port: 81}, // no Exec/Systemd — skipped
+		}),
+	}
+	blob, err := Build(BuildInput{MutagenVersion: "0.18.1", Cfg: cfg, RepoRoot: "/tmp/repo", SizingConf: []byte("swap=50%\nbuild_cache=15%\n")})
+	require.NoError(t, err)
+	names := tarEntryNames(t, blob)
+	assert.Contains(t, names, "systemd/web.service")
+	assert.NotContains(t, names, "systemd/routing.service")
+}
+
+func TestBuild_TarContainsServiceWrapper_ForExecFunc(t *testing.T) {
+	cfg := schema.Config{
+		Project: schema.Project{Name: "p"},
+		Services: schema.OrderedMapOf(map[string]schema.Service{
+			"worker": {ExecFunc: "run-worker"},
+		}),
+	}
+	blob, err := Build(BuildInput{MutagenVersion: "0.18.1", Cfg: cfg, RepoRoot: "/tmp/repo", SizingConf: []byte("swap=50%\nbuild_cache=15%\n")})
+	require.NoError(t, err)
+
+	unit := readTarEntry(t, blob, "systemd/worker.service")
+	assert.Contains(t, string(unit), "ExecStart=/opt/devm/service-wrappers/worker.sh")
+
+	entries := readTar(t, blob)
+	wrapper, ok := entries["service-wrappers/worker.sh"]
+	require.True(t, ok, "bundle missing service-wrappers/worker.sh")
+	assert.Equal(t, int64(0o755), wrapper.mode&0o777)
+	assert.Contains(t, string(wrapper.body), "run-worker")
+	assert.Contains(t, string(wrapper.body), "source /home/devm/devm.sh")
+}
+
+func TestBuild_NoServiceWrapper_ForExecArgv(t *testing.T) {
+	cfg := schema.Config{
+		Project: schema.Project{Name: "p"},
+		Services: schema.OrderedMapOf(map[string]schema.Service{
+			"web": {ExecArgv: []string{"/bin/true"}},
+		}),
+	}
+	blob, err := Build(BuildInput{MutagenVersion: "0.18.1", Cfg: cfg, RepoRoot: "/tmp/repo", SizingConf: []byte("swap=50%\nbuild_cache=15%\n")})
+	require.NoError(t, err)
+	names := tarEntryNames(t, blob)
+	for _, name := range names {
+		assert.NotContains(t, name, "service-wrappers/", "argv-form service must not emit a wrapper file")
+	}
+}
+
+func readTar(t *testing.T, blob []byte) map[string]tarEntry {
+	t.Helper()
+	tr := tar.NewReader(bytes.NewReader(blob))
+	out := map[string]tarEntry{}
+	for {
+		hdr, err := tr.Next()
+		if err == io.EOF {
+			break
+		}
+		require.NoError(t, err)
+		body, err := io.ReadAll(tr)
+		require.NoError(t, err)
+		out[hdr.Name] = tarEntry{mode: hdr.Mode, uid: int64(hdr.Uid), gid: int64(hdr.Gid), body: body}
+	}
+	return out
+}
+
+func TestBuild_ServiceUnit_InheritsCfgEnv(t *testing.T) {
+	cfg := schema.Config{
+		Project: schema.Project{Name: "p"},
+		Env: map[string]schema.EnvValue{
+			"GITHUB_TOKEN": {Literal: "xyz"}, // cfg-level env
+		},
+		Services: schema.OrderedMapOf(map[string]schema.Service{
+			"web": {
+				ExecArgv: []string{"/bin/true"}, // eligible for a unit
+				// no per-service env — the cfg-level entry must reach the rendered unit
+			},
+		}),
+	}
+	blob, err := Build(BuildInput{MutagenVersion: "0.18.1", Cfg: cfg, RepoRoot: "/tmp/repo", SizingConf: []byte("swap=50%\nbuild_cache=15%\n")})
+	require.NoError(t, err)
+	unit := readTarEntry(t, blob, "systemd/web.service")
+	// Rendered unit should carry an Environment= line for GITHUB_TOKEN.
+	// Regression: cfg.Env used to merge into svc.Env before RenderService;
+	// Task 5 dropped that merge and this pinning test locks it back in.
+	assert.Contains(t, string(unit), "GITHUB_TOKEN",
+		"top-level env entries must reach rendered systemd units")
+	assert.Contains(t, string(unit), "xyz")
+}
+
+func TestBuild_ServiceUnit_PerServiceEnvOverridesCfg(t *testing.T) {
+	// Same key in cfg.Env and svc.Env → svc.Env wins.
+	cfg := schema.Config{
+		Project: schema.Project{Name: "p"},
+		Env:     map[string]schema.EnvValue{"K": {Literal: "cfg-value"}},
+		Services: schema.OrderedMapOf(map[string]schema.Service{
+			"web": {
+				ExecArgv: []string{"/bin/true"},
+				Env:      map[string]schema.EnvValue{"K": {Literal: "svc-value"}},
+			},
+		}),
+	}
+	blob, err := Build(BuildInput{MutagenVersion: "0.18.1", Cfg: cfg, RepoRoot: "/tmp/repo", SizingConf: []byte("swap=50%\nbuild_cache=15%\n")})
+	require.NoError(t, err)
+	unit := readTarEntry(t, blob, "systemd/web.service")
+	assert.Contains(t, string(unit), "svc-value")
+	assert.NotContains(t, string(unit), "cfg-value",
+		"per-service env must override cfg-level env on collision")
+}
+
+func TestBuild_TarContainsDockerShims_WhenDockerTrue(t *testing.T) {
+	blob, err := Build(BuildInput{
+		Cfg:            schema.Config{Project: schema.Project{Name: "p"}, Docker: &schema.DockerConfig{Enabled: true}},
+		RepoRoot:       "/tmp/repo",
+		MutagenVersion: "0.18.1",
+		DockerRuncShim: []byte("runc-shim-elf"),
+		DockerCLIShim:  []byte("docker-shim-elf"),
+		SizingConf:     []byte("swap=50%\nbuild_cache=15%\n"),
+	})
+	require.NoError(t, err)
+	names := tarEntryNames(t, blob)
+	assert.Contains(t, names, "bin/devm-runc-shim")
+	assert.Contains(t, names, "bin/docker")
+	assert.Equal(t, []byte("runc-shim-elf"), readTarEntry(t, blob, "bin/devm-runc-shim"))
+}
+
+func TestBuild_TarOmitsDockerShims_WhenDockerFalse(t *testing.T) {
+	blob, err := Build(BuildInput{
+		Cfg:            schema.Config{Project: schema.Project{Name: "p"}},
+		RepoRoot:       "/tmp/repo",
+		MutagenVersion: "0.18.1",
+		DockerRuncShim: []byte("runc-shim-elf"),
+		DockerCLIShim:  []byte("docker-shim-elf"),
+		SizingConf:     []byte("swap=50%\nbuild_cache=15%\n"),
+	})
+	require.NoError(t, err)
+	names := tarEntryNames(t, blob)
+	assert.NotContains(t, names, "bin/devm-runc-shim")
+	assert.NotContains(t, names, "bin/docker")
+}
+
+func TestBuild_IncludesGdevmWhenPresent(t *testing.T) {
+	blob, err := Build(BuildInput{
+		Cfg:            schema.Config{Project: schema.Project{Name: "p"}},
+		RepoRoot:       "/tmp/repo",
+		MutagenVersion: "0.18.1",
+		Gdevm:          []byte("gdevm-elf-bytes"),
+		SizingConf:     []byte("swap=50%\nbuild_cache=15%\n"),
+	})
+	require.NoError(t, err)
+	names := tarEntryNames(t, blob)
+	assert.Contains(t, names, "bin/gdevm")
+	assert.Equal(t, []byte("gdevm-elf-bytes"), readTarEntry(t, blob, "bin/gdevm"))
+}
+
+func TestBuild_OmitsGdevmWhenAbsent(t *testing.T) {
+	blob, err := Build(BuildInput{
+		Cfg:            schema.Config{Project: schema.Project{Name: "p"}},
+		RepoRoot:       "/tmp/repo",
+		MutagenVersion: "0.18.1",
+		SizingConf:     []byte("swap=50%\nbuild_cache=15%\n"),
+	})
+	require.NoError(t, err)
+	names := tarEntryNames(t, blob)
+	assert.NotContains(t, names, "bin/gdevm")
+}
+
+func TestBuild_ServiceUnitJoinsDevmTarget(t *testing.T) {
+	cfg := schema.Config{
+		Project: schema.Project{Name: "p"},
+		Services: schema.OrderedMapOf(map[string]schema.Service{
+			"web": {ExecArgv: []string{"/bin/true"}},
+		}),
+	}
+	blob, err := Build(BuildInput{MutagenVersion: "0.18.1", Cfg: cfg, RepoRoot: "/tmp/repo", SizingConf: []byte("swap=50%\nbuild_cache=15%\n")})
+	require.NoError(t, err)
+
+	names := tarEntryNames(t, blob)
+	assert.NotContains(t, names, "systemd/devm-startup.service")
+	assert.NotContains(t, names, "systemd/devm-enforce.service")
+
+	webUnit := readTarEntry(t, blob, "systemd/web.service")
+	assert.Contains(t, string(webUnit), "WantedBy=devm.target")
+}
+
+// TestBuild_IncludesEtcProfileDevm proves the bundle carries the
+// login-shell PATH restorer that install.sh drops at
+// /etc/profile.d/devm.sh. Regression pin: without it, `bash -lc
+// <cmd>` inside the guest can't find devm's tools.
+func TestBuild_IncludesEtcProfileDevm(t *testing.T) {
+	body, err := Build(BuildInput{
+		Cfg: schema.Config{
+			Project: schema.Project{Name: "p"},
+		},
+		MutagenVersion: "0.18.1",
+		SizingConf:     []byte("swap=50%\nbuild_cache=15%\n"),
+	})
+	require.NoError(t, err)
+	entries := readTar(t, body)
+	entry, ok := entries["profile.d/devm.sh"]
+	require.True(t, ok, "bundle must contain profile.d/devm.sh")
+	assert.Equal(t, int64(0o644), entry.mode)
+	// Regression: /etc/profile.d/devm.sh must source /etc/environment
+	// via `set -a` so every login shell inherits devm's env — the PATH
+	// restore after /etc/profile rebuild, CA trust vars, UV_SYSTEM_CERTS.
+	// The `. /etc/environment` and `set -a` assertions pin the loader
+	// mechanism directly since it's what makes downstream consumers work.
+	assert.Contains(t, string(entry.body), ". /etc/environment")
+	assert.Contains(t, string(entry.body), "set -a")
+	// Regression: interactive SSH (bash -l) must land in the workspace
+	// directory, not $HOME. Without the cd, running `supabase start` (or
+	// any tool that treats cwd as the project root) initializes a fresh
+	// project under /home/devm instead of picking up the checkout.
+	// with-devm-env handles the same chdir for devm exec / devm shell.
+	assert.Contains(t, string(entry.body), `cd "$WORKSPACE"`,
+		"profile.d/devm.sh must chdir to $WORKSPACE so SSH login shells land in the project root")
+}
+
+// TestBuild_IncludesEtcEnvironment proves the bundle carries the
+// machine-wide env file that install.sh drops at /etc/environment,
+// where pam_env sources it for every ssh session (including raw
+// non-interactive `ssh host cmd`). Without this, devm's PATH and
+// cfg.Env don't reach non-wrapper shells.
+func TestBuild_IncludesEtcEnvironment(t *testing.T) {
+	body, err := Build(BuildInput{
+		Cfg:            schema.Config{Project: schema.Project{Name: "p"}},
+		MutagenVersion: "0.18.1",
+		SizingConf:     []byte("swap=50%\nbuild_cache=15%\n"),
+	})
+	require.NoError(t, err)
+	entries := readTar(t, body)
+	entry, ok := entries["etc/environment"]
+	require.True(t, ok, "bundle must contain etc/environment")
+	assert.Equal(t, int64(0o644), entry.mode)
+	assert.Contains(t, string(entry.body), "SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt")
+	assert.Contains(t, string(entry.body), "PATH=")
+}
+
+// TestBuild_EtcEnvironmentErrorPropagates proves an invalid env value
+// (raw newline — pam_env unrepresentable) causes Build to return the
+// render error rather than emit a subtly broken /etc/environment.
+func TestBuild_EtcEnvironmentErrorPropagates(t *testing.T) {
+	cfg := schema.Config{
+		Project: schema.Project{Name: "p"},
+		Env: map[string]schema.EnvValue{
+			"BAD": {Literal: "line1\nline2"},
+		},
+	}
+	_, err := Build(BuildInput{Cfg: cfg, MutagenVersion: "0.18.1", SizingConf: []byte("swap=50%\nbuild_cache=15%\n")})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "BAD")
+}
+
+func minimalCfg(t *testing.T) schema.Config {
+	t.Helper()
+	return schema.Config{Project: schema.Project{Name: "p"}}
+}
+
+func listTarEntries(t *testing.T, body []byte) map[string]struct {
+	body string
+	mode int64
+} {
+	t.Helper()
+	tr := tar.NewReader(bytes.NewReader(body))
+	out := map[string]struct {
+		body string
+		mode int64
+	}{}
+	for {
+		hdr, err := tr.Next()
+		if err == io.EOF {
+			break
+		}
+		require.NoError(t, err)
+		var b bytes.Buffer
+		_, err = io.Copy(&b, tr)
+		require.NoError(t, err)
+		out[hdr.Name] = struct {
+			body string
+			mode int64
+		}{body: b.String(), mode: hdr.Mode}
+	}
+	return out
+}
+
+func TestBuild_IncludesCommandsManifestAndGdevmBinary(t *testing.T) {
+	in := BuildInput{
+		Cfg:              minimalCfg(t),
+		RepoRoot:         t.TempDir(),
+		DaemonRuntimeDir: t.TempDir(),
+		MutagenVersion:   "0.18.1",
+		CommandsManifest: []byte(`{"repos":{}}`),
+		Gdevm:            []byte{0x7f, 'E', 'L', 'F'}, // sentinel; real bytes come from guestbin.Gdevm()
+		SizingConf:       []byte("swap=50%\nbuild_cache=15%\n"),
+	}
+	body, err := Build(in)
+	require.NoError(t, err)
+
+	entries := listTarEntries(t, body)
+	require.Contains(t, entries, "commands.json")
+	assert.Equal(t, `{"repos":{}}`, entries["commands.json"].body,
+		"commands.json body must be shipped verbatim")
+	assert.Equal(t, int64(0o644), entries["commands.json"].mode)
+
+	require.Contains(t, entries, "bin/gdevm")
+	assert.Equal(t, "\x7fELF", entries["bin/gdevm"].body)
+	assert.Equal(t, int64(0o755), entries["bin/gdevm"].mode)
+}
+
+func TestBuild_OmitsGdevmAndManifestWhenEmpty(t *testing.T) {
+	in := BuildInput{
+		Cfg:              minimalCfg(t),
+		RepoRoot:         t.TempDir(),
+		DaemonRuntimeDir: t.TempDir(),
+		MutagenVersion:   "0.18.1",
+		SizingConf:       []byte("swap=50%\nbuild_cache=15%\n"),
+	}
+	body, err := Build(in)
+	require.NoError(t, err)
+	entries := listTarEntries(t, body)
+	assert.NotContains(t, entries, "commands.json",
+		"nothing to ship when caller passes no manifest")
+	assert.NotContains(t, entries, "bin/gdevm")
+}
+
+func TestBuild_TarContainsSSHMaterial(t *testing.T) {
+	blob, err := Build(BuildInput{
+		Cfg:                 schema.Config{Project: schema.Project{Name: "p"}},
+		RepoRoot:            "/tmp/repo",
+		MutagenVersion:      "0.18.1",
+		SSHAuthorizedPubkey: []byte("ssh-ed25519 AAAA...\n"),
+		SSHHostPriv:         []byte("-----BEGIN OPENSSH PRIVATE KEY-----\n..."),
+		SSHHostPub:          []byte("ssh-ed25519 BBBB...\n"),
+		SizingConf:          []byte("swap=50%\nbuild_cache=15%\n"),
+	})
+	require.NoError(t, err)
+	names := tarEntryNames(t, blob)
+	assert.Contains(t, names, "ssh/authorized_keys")
+	assert.Contains(t, names, "ssh/ssh_host_ed25519_key")
+	assert.Contains(t, names, "ssh/ssh_host_ed25519_key.pub")
+}
+
+func TestBuild_IncludesMutagenAgent(t *testing.T) {
+	in := BuildInput{
+		Cfg:                    minimalCfg(t),
+		RepoRoot:               t.TempDir(),
+		DaemonRuntimeDir:       t.TempDir(),
+		MutagenVersion:         "0.18.1",
+		MutagenAgentLinuxArm64: []byte{0x7f, 'E', 'L', 'F', 'x', 'y', 'z'},
+		SizingConf:             []byte("swap=50%\nbuild_cache=15%\n"),
+	}
+	body, err := Build(in)
+	require.NoError(t, err)
+
+	entries := listTarEntries(t, body)
+	require.Contains(t, entries, "bin/mutagen-agent")
+	assert.Equal(t, "\x7fELFxyz", entries["bin/mutagen-agent"].body)
+	assert.Equal(t, int64(0o755), entries["bin/mutagen-agent"].mode)
+}
+
+func TestBuild_OmitsMutagenAgentWhenEmpty(t *testing.T) {
+	in := BuildInput{
+		Cfg:              minimalCfg(t),
+		RepoRoot:         t.TempDir(),
+		DaemonRuntimeDir: t.TempDir(),
+		MutagenVersion:   "0.18.1",
+		SizingConf:       []byte("swap=50%\nbuild_cache=15%\n"),
+	}
+	body, err := Build(in)
+	require.NoError(t, err)
+	entries := listTarEntries(t, body)
+	assert.NotContains(t, entries, "bin/mutagen-agent")
+}
+
+func TestBuild_EmitsSSHClientWhenPopulated(t *testing.T) {
+	in := BuildInput{
+		Cfg:                 schema.Config{Project: schema.Project{Name: "p"}},
+		RepoRoot:            "/tmp/repo",
+		MutagenVersion:      "0.18.1",
+		SSHClientConfig:     []byte("# ssh config body\n"),
+		SSHJumpClientPriv:   []byte("-----BEGIN PRIVATE KEY-----\nabc\n-----END PRIVATE KEY-----\n"),
+		SSHKnownHostsAppend: []byte("ops.example.com ssh-ed25519 AAAA...\n"),
+		SSHAgentBridgeUnit:  []byte("[Unit]\nDescription=devm-ssh-agent-bridge\n"),
+		SizingConf:          []byte("swap=50%\nbuild_cache=15%\n"),
+	}
+	blob, err := Build(in)
+	require.NoError(t, err)
+	entries := readTar(t, blob)
+
+	want := []string{
+		"ssh-client/config",
+		"ssh-client/devm-jump-id",
+		"ssh-client/known_hosts",
+		"ssh-client/devm-ssh-agent-bridge.service",
+	}
+	for _, w := range want {
+		_, ok := entries[w]
+		assert.Truef(t, ok, "missing tar entry %s", w)
+	}
+	assert.Equal(t, int64(0o600), entries["ssh-client/devm-jump-id"].mode&0o777,
+		"devm-jump-id must be 0600")
+	assert.Equal(t, int64(0o600), entries["ssh-client/config"].mode&0o777,
+		"config must be 0600")
+	assert.Equal(t, int64(0o600), entries["ssh-client/known_hosts"].mode&0o777,
+		"known_hosts must be 0600")
+	assert.Equal(t, int64(0o644), entries["ssh-client/devm-ssh-agent-bridge.service"].mode&0o777,
+		"unit file must be 0644")
+}
+
+func TestBuild_OmitsSSHClientWhenNil(t *testing.T) {
+	in := BuildInput{
+		Cfg:            schema.Config{Project: schema.Project{Name: "p"}},
+		RepoRoot:       "/tmp/repo",
+		MutagenVersion: "0.18.1",
+		SizingConf:     []byte("swap=50%\nbuild_cache=15%\n"),
+		// leave SSHClient* fields nil
+	}
+	blob, err := Build(in)
+	require.NoError(t, err)
+	entries := readTar(t, blob)
+	for _, name := range []string{
+		"ssh-client/config", "ssh-client/devm-jump-id",
+		"ssh-client/known_hosts", "ssh-client/devm-ssh-agent-bridge.service",
+	} {
+		_, ok := entries[name]
+		assert.Falsef(t, ok, "entry %s must NOT appear when SSHClient* fields nil", name)
+	}
+}
+
+func TestBuild_RendersInstallShWithMutagenVersion(t *testing.T) {
+	in := BuildInput{
+		Cfg:              minimalCfg(t),
+		RepoRoot:         t.TempDir(),
+		DaemonRuntimeDir: t.TempDir(),
+		MutagenVersion:   "0.18.1",
+		SizingConf:       []byte("swap=50%\nbuild_cache=15%\n"),
+	}
+	body, err := Build(in)
+	require.NoError(t, err)
+
+	entries := listTarEntries(t, body)
+	require.Contains(t, entries, "install.sh")
+	assert.Contains(t, entries["install.sh"].body,
+		"/home/devm/.mutagen/agents/0.18.1",
+		"install.sh must be rendered with mutagen version substituted")
+	assert.NotContains(t, entries["install.sh"].body,
+		"{{.MutagenVersion}}",
+		"install.sh template placeholder must not appear in output")
+}
+
+func TestBuild_ErrorsOnMissingMutagenVersion(t *testing.T) {
+	in := BuildInput{
+		Cfg:              minimalCfg(t),
+		RepoRoot:         t.TempDir(),
+		DaemonRuntimeDir: t.TempDir(),
+		SizingConf:       []byte("swap=50%\nbuild_cache=15%\n"),
+		// MutagenVersion intentionally empty
+	}
+	_, err := Build(in)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "mutagen version")
+}
+
+func TestBundle_ShipsSnapshotUnitsPerCronEntry(t *testing.T) {
+	cron := "0 3 * * *"
+	keep := 3
+	cfg := schema.Config{
+		Project: schema.Project{Name: "p"},
+		Snapshots: schema.OrderedMapOf(map[string]schema.Snapshot{
+			"pg":    {Cron: &cron, Keep: &keep},
+			"redis": {}, // no cron — no unit files, no manifest entry
+		}),
+	}
+	// OrderedMapOf doesn't guarantee declaration order (built from a
+	// Go map), but we only assert on membership + manifest contents.
+	blob, err := Build(BuildInput{
+		MutagenVersion: "0.18.1",
+		Cfg:            cfg,
+		RepoRoot:       "/tmp/repo",
+		SizingConf:     []byte("swap=50%\nbuild_cache=15%\n"),
+	})
+	require.NoError(t, err)
+
+	entries := readTar(t, blob)
+
+	_, ok := entries["systemd/devm-snapshot-pg.service"]
+	assert.True(t, ok, "bundle must ship the service unit for a cron-having snapshot entry")
+	_, ok = entries["systemd/devm-snapshot-pg.timer"]
+	assert.True(t, ok, "bundle must ship the timer unit for a cron-having snapshot entry")
+
+	_, ok = entries["systemd/devm-snapshot-redis.service"]
+	assert.False(t, ok, "bundle must NOT ship units for a snapshot entry without cron")
+	_, ok = entries["systemd/devm-snapshot-redis.timer"]
+	assert.False(t, ok, "bundle must NOT ship units for a snapshot entry without cron")
+
+	manifest, ok := entries["snapshots/manifest"]
+	require.True(t, ok, "bundle must include snapshots/manifest")
+	assert.Equal(t, "pg\n", string(manifest.body),
+		"manifest must list only the names that had cron, newline-delimited")
+	assert.Equal(t, int64(0o644), manifest.mode&0o777)
+}
+
+func TestBundle_WritesEmptyManifestWhenNoCronEntries(t *testing.T) {
+	// The manifest file always ships, even empty, because tar
+	// extraction is additive over /opt/devm: a stale manifest from
+	// a prior bundle (naming an entry that has since been dropped)
+	// would otherwise survive and install.sh's orphan cleanup would
+	// never remove the stale timer.
+	cfg := schema.Config{Project: schema.Project{Name: "p"}}
+	blob, err := Build(BuildInput{
+		MutagenVersion: "0.18.1",
+		Cfg:            cfg,
+		SizingConf:     []byte("swap=50%\nbuild_cache=15%\n"),
+	})
+	require.NoError(t, err)
+	entries := readTar(t, blob)
+	manifest, ok := entries["snapshots/manifest"]
+	require.True(t, ok, "manifest must ship even when empty so stale entries get scrubbed")
+	assert.Equal(t, "", string(manifest.body),
+		"no cron entries ⇒ empty manifest body")
+	assert.Equal(t, int64(0o644), manifest.mode&0o777)
+}
+
+// TestBundle_ShipsDevmShWhenPresent proves a non-empty DevmSh field
+// reaches the tar as a devm.sh entry carrying the exact bytes. The
+// guest install script extracts the tar at /opt/devm/, so this entry
+// lands at /opt/devm/devm.sh — where the snapshot hook runner sources
+// it before invoking backup_<name> / restore_<name>.
+func TestBundle_ShipsDevmShWhenPresent(t *testing.T) {
+	body := []byte("backup_appstate() { tar -cf - /var/lib/app; }\n")
+	in := BuildInput{
+		Cfg:            minimalCfg(t),
+		MutagenVersion: "0.18.1",
+		SizingConf:     []byte("swap=50%\nbuild_cache=15%\n"),
+		DevmSh:         body,
+	}
+	blob, err := Build(in)
+	require.NoError(t, err)
+
+	entries := readTar(t, blob)
+	entry, ok := entries["devm.sh"]
+	require.True(t, ok, "bundle must contain devm.sh when DevmSh is non-empty")
+	assert.Equal(t, int64(0o644), entry.mode&0o777, "devm.sh mode must be 0644")
+	assert.Equal(t, body, entry.body, "devm.sh body must be shipped verbatim")
+}
+
+// TestBundle_ShipsDevmMeShWhenPresent proves a non-empty DevmMeSh
+// field reaches the tar as a devm.me.sh entry carrying the exact
+// bytes, parallel to devm.sh.
+func TestBundle_ShipsDevmMeShWhenPresent(t *testing.T) {
+	body := []byte("backup_appstate() { /usr/local/bin/my-backup; }\n")
+	in := BuildInput{
+		Cfg:            minimalCfg(t),
+		MutagenVersion: "0.18.1",
+		SizingConf:     []byte("swap=50%\nbuild_cache=15%\n"),
+		DevmMeSh:       body,
+	}
+	blob, err := Build(in)
+	require.NoError(t, err)
+
+	entries := readTar(t, blob)
+	entry, ok := entries["devm.me.sh"]
+	require.True(t, ok, "bundle must contain devm.me.sh when DevmMeSh is non-empty")
+	assert.Equal(t, int64(0o644), entry.mode&0o777, "devm.me.sh mode must be 0644")
+	assert.Equal(t, body, entry.body, "devm.me.sh body must be shipped verbatim")
+}
+
+// TestBundle_OmitsDevmShWhenEmpty proves an empty DevmSh produces
+// no devm.sh tar entry — the field is opt-in.
+func TestBundle_OmitsDevmShWhenEmpty(t *testing.T) {
+	in := BuildInput{
+		Cfg:            minimalCfg(t),
+		MutagenVersion: "0.18.1",
+		SizingConf:     []byte("swap=50%\nbuild_cache=15%\n"),
+	}
+	blob, err := Build(in)
+	require.NoError(t, err)
+
+	entries := readTar(t, blob)
+	_, ok := entries["devm.sh"]
+	assert.False(t, ok, "bundle must NOT contain devm.sh when DevmSh is empty")
+	_, ok = entries["devm.me.sh"]
+	assert.False(t, ok, "bundle must NOT contain devm.me.sh when DevmMeSh is empty")
+}
+
+func TestBuild_IncludesSizingConf(t *testing.T) {
+	in := BuildInput{
+		Cfg:            minimalCfg(t),
+		RepoRoot:       t.TempDir(),
+		MutagenVersion: "0.18.1",
+		SizingConf:     []byte("swap=50%\nbuild_cache=15%\n"),
+	}
+	body, err := Build(in)
+	require.NoError(t, err)
+
+	entries := readTar(t, body)
+	entry, ok := entries["sizing/conf"]
+	require.True(t, ok, "bundle must contain sizing/conf")
+	assert.Equal(t, int64(0o644), entry.mode&0o777, "sizing/conf must be 0644")
+	assert.Equal(t, "swap=50%\nbuild_cache=15%\n", string(entry.body),
+		"sizing/conf body must be shipped verbatim")
+}
+
+func TestBuild_CronEntries(t *testing.T) {
+	cfg := schema.Config{
+		Project: schema.Project{Name: "p"},
+		Env: map[string]schema.EnvValue{
+			"FOO": {Literal: "bar"},
+			"TOK": {Secret: &schema.SecretRef{Name: "api"}},
+		},
+		Path: []string{"/opt/tools/bin"},
+		Cron: map[string]string{"b": "0 * * * *", "a": "*/5 * * * *"},
+	}
+	blob, err := Build(BuildInput{MutagenVersion: "0.18.1", Cfg: cfg, RepoRoot: "/tmp/repo", SizingConf: []byte("swap=50%\nbuild_cache=15%\n")})
+	require.NoError(t, err)
+
+	entries := readTar(t, blob)
+	for _, fn := range []string{"a", "b"} {
+		svc, ok := entries["systemd/"+render.CronServiceUnit(fn)]
+		require.True(t, ok, "missing service unit for %s", fn)
+		assert.Equal(t, int64(0o644), svc.mode&0o777)
+		tmr, ok := entries["systemd/"+render.CronTimerUnit(fn)]
+		require.True(t, ok, "missing timer unit for %s", fn)
+		assert.Equal(t, int64(0o644), tmr.mode&0o777)
+		wrapper, ok := entries[strings.TrimPrefix(render.CronWrapperPath(fn), GuestRoot+"/")]
+		require.True(t, ok, "missing wrapper for %s", fn)
+		assert.Equal(t, int64(0o755), wrapper.mode&0o777)
+		assert.Contains(t, string(wrapper.body), "export FOO=\"bar\"\n")
+		assert.Contains(t, string(wrapper.body), "export TOK=\""+schema.TokenFor("api")+"\"\n")
+		assert.Contains(t, string(wrapper.body), "export PATH=\"/opt/tools/bin:$PATH\"\n")
+	}
+	manifest, ok := entries["cron/manifest"]
+	require.True(t, ok)
+	assert.Equal(t, int64(0o644), manifest.mode&0o777)
+	assert.Equal(t, "a\nb\n", string(manifest.body))
+}
+
+func TestBuild_CronManifestAlwaysWritten(t *testing.T) {
+	cfg := schema.Config{Project: schema.Project{Name: "p"}}
+	blob, err := Build(BuildInput{MutagenVersion: "0.18.1", Cfg: cfg, RepoRoot: "/tmp/repo", SizingConf: []byte("swap=50%\nbuild_cache=15%\n")})
+	require.NoError(t, err)
+	manifest, ok := readTar(t, blob)["cron/manifest"]
+	require.True(t, ok, "cron/manifest must be present even with no cron entries")
+	assert.Empty(t, manifest.body)
+}

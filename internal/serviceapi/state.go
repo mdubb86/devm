@@ -1,0 +1,183 @@
+package serviceapi
+
+import (
+	"encoding/json"
+	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
+	"time"
+
+	"github.com/mdubb86/devm/internal/daemonlog"
+	"github.com/mdubb86/devm/internal/identity"
+	"github.com/mdubb86/devm/internal/schema"
+)
+
+// StateDir returns the directory where per-project last-applied cfg
+// snapshots live. Sibling to the socket path; same lifecycle (created
+// on daemon startup, wiped on uninstall).
+func StateDir(cfg identity.Config) string {
+	return filepath.Join(cfg.RuntimeDir(), "state")
+}
+
+// validProjectID rejects project IDs that could escape StateDir() via
+// filepath.Join — e.g. "../evil" or "foo/bar" — before they reach a
+// filesystem call. projectID arrives over the daemon's unix-socket HTTP
+// API (POST /vm/start, /vm/reconcile, ...), so it's attacker-reachable
+// input, not just internal plumbing. "." alone is allowed (project IDs
+// like "foo.bar" are legitimate); only path separators and ".."
+// traversal are rejected.
+func validProjectID(id string) error {
+	if id == "" || strings.ContainsAny(id, "/\\") || strings.Contains(id, "..") {
+		return fmt.Errorf("invalid project id %q", id)
+	}
+	return nil
+}
+
+// StateSnapshot is what the daemon persists per project. Wraps
+// schema.Config with computed sidecar state (like rendered template
+// installer content) that ComputeAllChanges needs but that isn't
+// derivable from schema.Config alone at reconcile time (source files
+// on disk may have changed since last apply).
+//
+// SecretHashes is the sha256(value) map for every `!secret NAME` ref
+// this snapshot was written with. Comparing against the freshly
+// resolved keychain values is how the diff engine detects
+// keychain-value rotation — the ref syntax hasn't changed but the
+// stored value has. Values themselves never persist to disk.
+type StateSnapshot struct {
+	Cfg              schema.Config     `json:"cfg"`
+	TemplateContents map[string]string `json:"template_contents,omitempty"` // basename -> rendered installer content
+	SecretHashes     map[string]string `json:"secret_hashes,omitempty"`     // secret name -> hex sha256(resolved value)
+
+	// ProxyVersion is ironproxy.EmbeddedSha256() as of the last time this
+	// project's iron-proxy was spawned. A running proxy whose stamp differs
+	// from the current EmbeddedSha256() is STALE (spawned by an older devm
+	// build) and should be respawned on the current binary.
+	ProxyVersion string `json:"proxy_version,omitempty"`
+
+	// BundleFingerprint is the daemon Build.Fingerprint recorded
+	// the last time a provisioning bundle was piped into this
+	// project's guest. Compared against the running daemon's
+	// Fingerprint by reconcile drift detection and by the daemon-
+	// startup catchup sweep to decide whether the guest is running
+	// stale gdevm / env-template bytes.
+	BundleFingerprint string `json:"bundle_fingerprint,omitempty"`
+
+	// ProjectIP is the project's allocated 127.42/16 loopback IP, mirrored
+	// here from projectInfo so a daemon restart can recover it. Empty
+	// while the project is stopped; set at /vm/start, cleared at /vm/stop.
+	// AdoptIronProxies reads this back into projectInfo on daemon startup.
+	ProjectIP string `json:"project_ip,omitempty"`
+
+	// Routes is the last resolved route set the daemon accepted via
+	// /routes/apply for this project — the whole shape (Mode, Direct,
+	// ExposeHost, and the substituted BackendHost) baked in and ready
+	// to replay. Mirrored on every successful /routes/apply and cleared
+	// on /routes/remove; recoverProjectState re-pushes it into the live
+	// Routes table on daemon restart, so `devm route local|vm` survives
+	// the restart without a manual re-issue and running in-guest
+	// sessions don't lose `.test` hairpin.
+	Routes []Route `json:"routes,omitempty"`
+
+	// MacCwd is the project's Mac-side working directory, mirrored here
+	// from the CLI's cold-start seed and every /vm/reconcile so a later
+	// iron-proxy respawn (the watchdog, or any other daemon-only path
+	// with no request-scoped repoRoot) can still derive a URL-nil
+	// primary repo's clone URL via `git remote get-url origin`.
+	MacCwd string `json:"mac_cwd,omitempty"`
+}
+
+// ReadStateSnapshot loads the persisted snapshot for a project.
+// Returns (nil, nil) when the file is absent — a fresh project, or
+// one whose state file we just quarantined (see below).
+//
+// An unparseable snapshot — typical cause: state file written by an
+// older schema the current daemon can't decode — is renamed to
+// `<path>.corrupt-<unixnano>` and treated as absent. The daemon then
+// rebuilds state on the next reconcile. Pre-fix, the parse error was
+// returned so callers could log it; in practice every caller just
+// logged-and-continued (one line in the daemon err log, once at
+// boot), while `devm status` kept reporting an unexplained
+// `proxy: UNHEALTHY` for the rest of the day. Self-healing with
+// forensic quarantine beats degraded silence.
+//
+// A read-permission or other I/O error is still returned loudly —
+// those shouldn't be auto-recovered.
+func ReadStateSnapshot(cfg identity.Config, projectID string) (*StateSnapshot, error) {
+	if err := validProjectID(projectID); err != nil {
+		return nil, err
+	}
+	path := filepath.Join(StateDir(cfg), projectID+".json")
+	body, err := os.ReadFile(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("read state %s: %w", path, err)
+	}
+	var snap StateSnapshot
+	if parseErr := json.Unmarshal(body, &snap); parseErr != nil {
+		quarantine := fmt.Sprintf("%s.corrupt-%d", path, time.Now().UnixNano())
+		renameErr := os.Rename(path, quarantine)
+		if renameErr != nil {
+			// Can't quarantine (permissions? disk full?). Return a
+			// loud error so this doesn't silently keep failing every
+			// read.
+			return nil, fmt.Errorf(
+				"parse state %s: %v (quarantine to %s also failed: %v)",
+				path, parseErr, quarantine, renameErr)
+		}
+		daemonlog.Errorf(
+			"serviceapi: state snapshot %s was unparseable (likely written by an older devm schema): %v — quarantined to %s and rebuilding on next reconcile",
+			path, parseErr, quarantine)
+		return nil, nil
+	}
+	return &snap, nil
+}
+
+// WriteStateSnapshot persists snap as the last-applied snapshot for
+// projectID. Atomic via temp file + rename to survive daemon crashes
+// mid-write.
+func WriteStateSnapshot(cfg identity.Config, projectID string, snap StateSnapshot) error {
+	if err := validProjectID(projectID); err != nil {
+		return err
+	}
+	if err := os.MkdirAll(StateDir(cfg), 0o700); err != nil {
+		return fmt.Errorf("mkdir state dir: %w", err)
+	}
+	body, err := json.Marshal(snap)
+	if err != nil {
+		return fmt.Errorf("marshal snapshot: %w", err)
+	}
+	path := filepath.Join(StateDir(cfg), projectID+".json")
+	tmp, err := os.CreateTemp(StateDir(cfg), projectID+".json.*")
+	if err != nil {
+		return fmt.Errorf("create tmp state file: %w", err)
+	}
+	tmpPath := tmp.Name()
+	if _, err := tmp.Write(body); err != nil {
+		tmp.Close()
+		os.Remove(tmpPath)
+		return fmt.Errorf("write tmp state: %w", err)
+	}
+	if err := tmp.Close(); err != nil {
+		os.Remove(tmpPath)
+		return err
+	}
+	return os.Rename(tmpPath, path)
+}
+
+// RemoveStateCfg deletes the snapshot for projectID. Idempotent —
+// remove-of-missing is not an error.
+func RemoveStateCfg(cfg identity.Config, projectID string) error {
+	if err := validProjectID(projectID); err != nil {
+		return err
+	}
+	path := filepath.Join(StateDir(cfg), projectID+".json")
+	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	return nil
+}

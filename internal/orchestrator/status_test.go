@@ -1,0 +1,386 @@
+package orchestrator
+
+import (
+	"context"
+	"os"
+	"path/filepath"
+	"testing"
+	"time"
+
+	"github.com/mdubb86/devm/internal/identity"
+	"github.com/mdubb86/devm/internal/sandbox/tart"
+	"github.com/mdubb86/devm/internal/schema"
+	"github.com/mdubb86/devm/internal/serviceapi"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+)
+
+func statusMinimalCfg() schema.Config {
+	return schema.Config{
+		Project: schema.Project{Name: "x"},
+	}
+}
+
+// makeFakeTartStatus creates a fake tart binary for RunStatus tests.
+// Uses files to avoid shell quoting issues with YAML content.
+//   - `list --format json` → listJSON
+//   - `exec <vmName> bash -c "cat ..."` → snapOut (ReadSnapshot)
+//   - `exec <vmName> bash -c "for ..."` → probeOut (probeSessions)
+func makeFakeTartStatus(t *testing.T, listJSON, snapOut, probeOut string) *tart.Tart {
+	t.Helper()
+	dir := t.TempDir()
+	bin := filepath.Join(dir, "fake-tart")
+	listFile := filepath.Join(dir, "list.json")
+	snapFile := filepath.Join(dir, "snap.yaml")
+	probeFile := filepath.Join(dir, "probe.txt")
+
+	require.NoError(t, os.WriteFile(listFile, []byte(listJSON), 0o644))
+	require.NoError(t, os.WriteFile(snapFile, []byte(snapOut), 0o644))
+	require.NoError(t, os.WriteFile(probeFile, []byte(probeOut), 0o644))
+
+	// Both ReadSnapshot and probeSessions use `bash -c <script>`.
+	// Distinguish them by $5 (the bash body):
+	//   cat*  → ReadSnapshot ("cat \"$HOME/...\"")
+	//   *     → probeSessions (the /proc-walking for-loop)
+	script := "#!/bin/sh\n" +
+		"case \"$1\" in\n" +
+		"  list)\n" +
+		"    cat '" + listFile + "'\n" +
+		"    ;;\n" +
+		"  exec)\n" +
+		"    case \"$3\" in\n" +
+		"      bash)\n" +
+		"        case \"$5\" in\n" +
+		"          cat*)\n" +
+		"            cat '" + snapFile + "'\n" +
+		"            ;;\n" +
+		"          *)\n" +
+		"            cat '" + probeFile + "'\n" +
+		"            ;;\n" +
+		"        esac\n" +
+		"        ;;\n" +
+		"      *)\n" +
+		"        exit 0\n" +
+		"        ;;\n" +
+		"    esac\n" +
+		"    ;;\n" +
+		"  *)\n" +
+		"    exit 0\n" +
+		"    ;;\n" +
+		"esac\n"
+
+	require.NoError(t, os.WriteFile(bin, []byte(script), 0o755))
+	tr := tart.New()
+	tr.Path = bin
+	return tr
+}
+
+func TestRunStatus_Absent(t *testing.T) {
+	tr := makeFakeTartStatus(t, `[]`, "", "")
+	res, err := RunStatus(identity.Prod, statusMinimalCfg(), tr, "/tmp/fake", "test-fp")
+	assert.NoError(t, err)
+	assert.Equal(t, "absent", res.State)
+	assert.Empty(t, res.Sessions)
+	assert.Equal(t, "x", res.Sandbox)
+}
+
+func TestRunStatus_Stopped(t *testing.T) {
+	tr := makeFakeTartStatus(t, `[{"Name":"x","State":"stopped"}]`, "", "")
+	res, err := RunStatus(identity.Prod, statusMinimalCfg(), tr, "/tmp/fake", "test-fp")
+	assert.NoError(t, err)
+	assert.Equal(t, "stopped", res.State)
+	assert.Empty(t, res.Sessions)
+}
+
+// seedStatusHome points $HOME at a temp dir so serviceapi.ReadStateSnapshot
+// resolves to it, and optionally seeds a StateSnapshot for projectID.
+// Returns the temp dir path. Cleanup is registered on t.
+func seedStatusHome(t *testing.T, projectID string, snap *serviceapi.StateSnapshot) string {
+	t.Helper()
+	home, err := os.MkdirTemp("/tmp", "devm-status-")
+	require.NoError(t, err)
+	t.Cleanup(func() { os.RemoveAll(home) })
+	t.Setenv("HOME", home)
+	if snap != nil {
+		require.NoError(t, serviceapi.WriteStateSnapshot(identity.Prod, projectID, *snap))
+	}
+	return home
+}
+
+func TestRunStatus_RunningInSync(t *testing.T) {
+	snapCfg := statusMinimalCfg()
+	seedStatusHome(t, "x", &serviceapi.StateSnapshot{Cfg: snapCfg})
+	tr := makeFakeTartStatus(t,
+		`[{"Name":"x","State":"running"}]`,
+		"",
+		"27 bash pts/1 agent\n",
+	)
+	res, err := RunStatus(identity.Prod, snapCfg, tr, "/tmp/fake", "test-fp")
+	assert.NoError(t, err)
+	assert.Equal(t, "running", res.State)
+	assert.Len(t, res.Sessions, 1)
+	assert.Zero(t, res.PendingLive)
+	assert.Zero(t, res.PendingRecreate)
+}
+
+func TestRunStatus_RunningPendingMixed(t *testing.T) {
+	snapCfg := statusMinimalCfg()
+	seedStatusHome(t, "x", &serviceapi.StateSnapshot{Cfg: snapCfg})
+	tr := makeFakeTartStatus(t,
+		`[{"Name":"x","State":"running"}]`,
+		"",
+		"",
+	)
+	newCfg := statusMinimalCfg()
+	newCfg.Docker = &schema.DockerConfig{Enabled: true}
+	newCfg.Services = schema.OrderedMapOf(map[string]schema.Service{"api": {Port: 8080}})
+	res, err := RunStatus(identity.Prod, newCfg, tr, "/tmp/fake", "test-fp")
+	assert.NoError(t, err)
+	assert.Equal(t, 1, res.PendingLive)     // port_add
+	assert.Equal(t, 1, res.PendingRecreate) // docker_toggle
+}
+
+func TestRunStatus_RunningNoSnapshotIsInSync(t *testing.T) {
+	// No daemon-side snapshot on disk → treat current cfg as the baseline.
+	seedStatusHome(t, "x", nil)
+	tr := makeFakeTartStatus(t,
+		`[{"Name":"x","State":"running"}]`,
+		"",
+		"",
+	)
+	cfg := statusMinimalCfg()
+	cfg.Services = schema.OrderedMapOf(map[string]schema.Service{"api": {Port: 8080}})
+	res, err := RunStatus(identity.Prod, cfg, tr, "/tmp/fake", "test-fp")
+	assert.NoError(t, err)
+	assert.Equal(t, "running", res.State)
+	assert.Zero(t, res.PendingLive)
+	assert.Zero(t, res.PendingRecreate)
+}
+
+// startHandshakeDaemon spins up a real serviceapi.Server with the
+// /handshake endpoint registered on a temp Unix socket, and points
+// $HOME at a temp dir so identity.Prod.SocketPath() (and therefore
+// RunStatus's internal serviceapi.NewClient()) resolves to it.
+// /handshake serves proxy health from the StateCache, so project "x"
+// (statusMinimalCfg's project name) is seeded as a known project with
+// a missing iron-proxy — matching what a real daemon's watchdog
+// warmup would already have reconciled for a project that has run
+// before but has nothing healthy to report. Returns a cleanup func.
+func startHandshakeDaemon(t *testing.T) func() {
+	t.Helper()
+	// Unix domain socket paths are capped at ~104 bytes on macOS/BSD;
+	// t.TempDir() nests too deep once "Library/Application
+	// Support/devm/devm.sock" is appended. Use a short /tmp-rooted dir
+	// instead.
+	rtDir, err := os.MkdirTemp("/tmp", "devm-rt-")
+	require.NoError(t, err)
+	t.Cleanup(func() { os.RemoveAll(rtDir) })
+	t.Setenv("HOME", rtDir)
+
+	_, err = serviceapi.EnsureRuntimeDir(identity.Prod)
+	require.NoError(t, err)
+	socket := identity.Prod.SocketPath()
+	srv := serviceapi.NewServer(socket, serviceapi.Build{Version: "test"})
+	cache := serviceapi.NewStateCache()
+	cache.SetBuild(serviceapi.Build{Version: "test"})
+	cache.SetIronProxyHealth("x", serviceapi.ProxyHealth{Status: serviceapi.ProxyMissing})
+	serviceapi.RegisterHandshakeHandler(srv, cache)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	errCh := make(chan error, 1)
+	go func() { errCh <- srv.Serve(ctx) }()
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if _, err := os.Stat(socket); err == nil {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	require.FileExists(t, socket)
+
+	return func() { cancel(); <-errCh }
+}
+
+// TestRunStatus_StoppedVM_ProxyHealthNil proves the bug fix: with a
+// reachable daemon that WOULD answer /handshake (it isn't unreachable
+// — that's a separate nil-ProxyHealth path covered by
+// TestRunStatus_RoutingZeroWhenDaemonUnreachable), a stopped-VM
+// project still leaves res.ProxyHealth nil. Before the fix, RunStatus
+// called Handshake unconditionally and this would have been non-nil
+// (ProxyMissing), incorrectly triggering the `devm status` exit-4
+// path for a VM that was never expected to have a live proxy.
+func TestRunStatus_StoppedVM_ProxyHealthNil(t *testing.T) {
+	cleanup := startHandshakeDaemon(t)
+	defer cleanup()
+
+	tr := makeFakeTartStatus(t, `[{"Name":"x","State":"stopped"}]`, "", "")
+	res, err := RunStatus(identity.Prod, statusMinimalCfg(), tr, "/tmp/fake", "test-fp")
+	require.NoError(t, err)
+	assert.Equal(t, "stopped", res.State)
+	assert.Nil(t, res.ProxyHealth)
+}
+
+// TestRunStatus_RunningVM_MissingProxySet proves the running-VM path
+// is unaffected: a running-VM project with no adopted iron-proxy still
+// gets a non-nil ProxyHealth (MISSING), same as before the fix.
+func TestRunStatus_RunningVM_MissingProxySet(t *testing.T) {
+	cleanup := startHandshakeDaemon(t)
+	defer cleanup()
+
+	tr := makeFakeTartStatus(t, `[{"Name":"x","State":"running"}]`, "", "")
+	res, err := RunStatus(identity.Prod, statusMinimalCfg(), tr, "/tmp/fake", "test-fp")
+	require.NoError(t, err)
+	assert.Equal(t, "running", res.State)
+	require.NotNil(t, res.ProxyHealth)
+	assert.Equal(t, serviceapi.ProxyMissing, res.ProxyHealth.Status)
+}
+
+// fakeStatusTartLister satisfies serviceapi.TartLister for tests that
+// only need /status/all's orphan-detection dependency satisfied — no
+// projects report as devm-orphaned.
+type fakeStatusTartLister struct{}
+
+func (fakeStatusTartLister) List(context.Context) ([]tart.VM, error) { return nil, nil }
+
+// startStatusAllDaemon spins up a real serviceapi.Server with
+// /status/all registered against cache, on identity.Prod's socket
+// path (so RunStatus's internal serviceapi.NewClient() finds it).
+// Mirrors startHandshakeDaemon's pattern. Returns a cleanup func.
+func startStatusAllDaemon(t *testing.T, cache *serviceapi.StateCache) func() {
+	t.Helper()
+	rtDir, err := os.MkdirTemp("/tmp", "devm-rt-")
+	require.NoError(t, err)
+	t.Cleanup(func() { os.RemoveAll(rtDir) })
+	t.Setenv("HOME", rtDir)
+
+	_, err = serviceapi.EnsureRuntimeDir(identity.Prod)
+	require.NoError(t, err)
+	socket := identity.Prod.SocketPath()
+	srv := serviceapi.NewServer(socket, serviceapi.Build{Version: "test"})
+	serviceapi.RegisterStatusAllHandler(srv, identity.Prod, fakeStatusTartLister{}, cache)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	errCh := make(chan error, 1)
+	go func() { errCh <- srv.Serve(ctx) }()
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if _, err := os.Stat(socket); err == nil {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	require.FileExists(t, socket)
+
+	return func() { cancel(); <-errCh }
+}
+
+// TestStatus_ProxyHealthyReflectsPerProjectListenerHealth pins that
+// the aggregate proxy_healthy is derived from the per-project
+// ProxyListenerHealth signals, not the old boot-time boolean: one
+// running project healthy, one running project unhealthy → overall
+// false, naming the unhealthy one.
+func TestStatus_ProxyHealthyReflectsPerProjectListenerHealth(t *testing.T) {
+	cache := serviceapi.NewStateCache()
+	cache.SetVMState("proj-a", serviceapi.VMRunning)
+	cache.SetProxyListenerHealth("proj-a", true)
+	cache.SetVMState("proj-b", serviceapi.VMRunning)
+	cache.SetProxyListenerHealth("proj-b", false)
+	cleanup := startStatusAllDaemon(t, cache)
+	defer cleanup()
+
+	tr := makeFakeTartStatus(t, `[]`, "", "")
+	res, err := RunStatus(identity.Prod, statusMinimalCfg(), tr, "/tmp/fake", "test-fp")
+	require.NoError(t, err)
+	assert.False(t, res.ProxyHealthy)
+	assert.Contains(t, res.ProxyError, "proj-b")
+}
+
+// TestStatus_ProxyHealthyTrueWhenNoRunningProjects proves the
+// aggregate is vacuously true when the cache has no running projects
+// — nothing to be unhealthy about.
+func TestStatus_ProxyHealthyTrueWhenNoRunningProjects(t *testing.T) {
+	cache := serviceapi.NewStateCache()
+	cache.SetVMState("proj-a", serviceapi.VMStopped)
+	cleanup := startStatusAllDaemon(t, cache)
+	defer cleanup()
+
+	tr := makeFakeTartStatus(t, `[]`, "", "")
+	res, err := RunStatus(identity.Prod, statusMinimalCfg(), tr, "/tmp/fake", "test-fp")
+	require.NoError(t, err)
+	assert.True(t, res.ProxyHealthy)
+	assert.Empty(t, res.ProxyError)
+}
+
+// TestStatus_ProxyHealthyTrueWhenAllRunningHealthy proves the
+// aggregate is true, with no error, when every running project's
+// listener pair is healthy.
+func TestStatus_ProxyHealthyTrueWhenAllRunningHealthy(t *testing.T) {
+	cache := serviceapi.NewStateCache()
+	cache.SetVMState("proj-a", serviceapi.VMRunning)
+	cache.SetProxyListenerHealth("proj-a", true)
+	cache.SetVMState("proj-b", serviceapi.VMRunning)
+	cache.SetProxyListenerHealth("proj-b", true)
+	cleanup := startStatusAllDaemon(t, cache)
+	defer cleanup()
+
+	tr := makeFakeTartStatus(t, `[]`, "", "")
+	res, err := RunStatus(identity.Prod, statusMinimalCfg(), tr, "/tmp/fake", "test-fp")
+	require.NoError(t, err)
+	assert.True(t, res.ProxyHealthy)
+	assert.Empty(t, res.ProxyError)
+}
+
+// TestRunStatus_MutagenHealthPropagatesForCurrentProject proves
+// RunStatus picks this project's own MutagenHealth verdict out of
+// /status/all's cross-project rows (matching statusMinimalCfg's
+// project name "x"), ignoring other projects' rows.
+func TestRunStatus_MutagenHealthPropagatesForCurrentProject(t *testing.T) {
+	cache := serviceapi.NewStateCache()
+	cache.SetVMState("x", serviceapi.VMRunning)
+	cache.SetMutagenHealth("x", serviceapi.MutagenHealth{Status: serviceapi.MutagenDead})
+	cache.SetVMState("other-proj", serviceapi.VMRunning)
+	cache.SetMutagenHealth("other-proj", serviceapi.MutagenHealth{Status: serviceapi.MutagenOK})
+	cleanup := startStatusAllDaemon(t, cache)
+	defer cleanup()
+
+	tr := makeFakeTartStatus(t, `[]`, "", "")
+	res, err := RunStatus(identity.Prod, statusMinimalCfg(), tr, "/tmp/fake", "test-fp")
+	require.NoError(t, err)
+	assert.Equal(t, "dead", res.MutagenHealth)
+}
+
+// TestRunStatus_MutagenHealthEmptyWhenUntracked proves res.MutagenHealth
+// stays "" rather than claiming a verdict when the cache has never
+// recorded one for this project.
+func TestRunStatus_MutagenHealthEmptyWhenUntracked(t *testing.T) {
+	cache := serviceapi.NewStateCache()
+	cache.SetVMState("x", serviceapi.VMRunning)
+	cleanup := startStatusAllDaemon(t, cache)
+	defer cleanup()
+
+	tr := makeFakeTartStatus(t, `[]`, "", "")
+	res, err := RunStatus(identity.Prod, statusMinimalCfg(), tr, "/tmp/fake", "test-fp")
+	require.NoError(t, err)
+	assert.Empty(t, res.MutagenHealth)
+}
+
+func TestRunStatus_RoutingZeroWhenDaemonUnreachable(t *testing.T) {
+	// When the daemon is not running, RoutingStatusFromDaemon fails and
+	// RunStatus leaves Routing zero-valued. RunStatus must not error out
+	// in this case — the format layer handles zero Routing as unreachable.
+	//
+	// Point HOME at a tmpdir so identity.Prod.SocketPath() resolves to a
+	// nonexistent socket, simulating daemon-unreachable regardless of
+	// whether a real daemon is running on this machine.
+	t.Setenv("HOME", t.TempDir())
+
+	tr := makeFakeTartStatus(t, `[]`, "", "")
+	cfg := statusMinimalCfg()
+	res, err := RunStatus(identity.Prod, cfg, tr, "/tmp/fake", "test-fp")
+	require.NoError(t, err)
+	assert.Equal(t, "absent", res.State)
+	assert.Equal(t, "", res.Routing.Proxy)
+	assert.False(t, res.Routing.ProxyReachable)
+}

@@ -1,0 +1,37 @@
+# Managed by devm. Regenerated on VM lifecycle events; hand edits will be
+# overwritten. If you need to re-add the Include, put it NEAR THE TOP of
+# ~/.ssh/config — before any Host or Match block — otherwise ssh_config
+# scoping ties the Include to the preceding block and devm's Host entries
+# won't resolve.
+#     Include "{{RUNTIME_DIR}}/ssh_config"
+
+Host devm-alpha
+    HostName             alpha.test
+    User                 devm
+    Port                 22
+    IdentityFile         "{{RUNTIME_DIR}}/ssh/projects/alpha/id_ed25519"
+    UserKnownHostsFile   "{{RUNTIME_DIR}}/ssh/projects/alpha/known_hosts"
+    HostKeyAlias         devm-alpha
+    StrictHostKeyChecking yes
+    IdentitiesOnly       yes
+
+Host devm-bravo
+    HostName             bravo.test
+    User                 devm
+    Port                 22
+    IdentityFile         "{{RUNTIME_DIR}}/ssh/projects/bravo/id_ed25519"
+    UserKnownHostsFile   "{{RUNTIME_DIR}}/ssh/projects/bravo/known_hosts"
+    HostKeyAlias         devm-bravo
+    StrictHostKeyChecking yes
+    IdentitiesOnly       yes
+
+Host devm-delta
+    HostName             delta.test
+    User                 devm
+    Port                 22
+    IdentityFile         "{{RUNTIME_DIR}}/ssh/projects/delta/id_ed25519"
+    UserKnownHostsFile   "{{RUNTIME_DIR}}/ssh/projects/delta/known_hosts"
+    HostKeyAlias         devm-delta
+    StrictHostKeyChecking yes
+    IdentitiesOnly       yes
+

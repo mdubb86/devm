@@ -1,0 +1,270 @@
+package serviceapi
+
+import (
+	"strings"
+	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
+	"github.com/mdubb86/devm/internal/schema"
+	"github.com/mdubb86/devm/internal/softnet"
+)
+
+func TestComputeExposeMap_ServicesAndSSH(t *testing.T) {
+	cfg := schema.Config{Services: schema.OrderedMapOf(map[string]schema.Service{
+		"db":     {Port: 5432, Direct: true, Hostname: "db.test", BindIP: ""},
+		"web":    {Port: 3000, Hostname: "web.test"}, // not direct, but has hostname+port -> exposed
+		"noport": {},                                 // masks/exec-only service: no port -> not exposed
+		"nohost": {Port: 9999},                       // port but no hostname -> not exposed
+	})}
+	got := computeExposeMap(cfg, "127.42.0.1")
+
+	// Expect one entry per service with hostname+port (direct or not),
+	// plus SSH, gdevm-serve's always-on health port, and filestash's
+	// always-on port. "noport" and "nohost" don't participate in
+	// devm's routing model, so they must NOT appear.
+	byGuest := map[int]softnet.ExposePort{}
+	for _, p := range got {
+		byGuest[p.GuestPort] = p
+	}
+	if len(got) != 5 {
+		t.Fatalf("want 5 expose ports (db, web, ssh, gdevm-serve, filestash), got %d: %+v", len(got), got)
+	}
+	if p := byGuest[5432]; p.HostPort != 5432 || p.BindIP != "127.42.0.1" {
+		t.Errorf("db: want host 5432 bind 127.42.0.1, got %+v", p)
+	}
+	if p := byGuest[3000]; p.HostPort != 3000 || p.BindIP != "127.42.0.1" {
+		t.Errorf("web: want host 3000 bind 127.42.0.1 (non-direct services with hostname+port are exposed too), got %+v", p)
+	}
+	if _, ok := byGuest[9999]; ok {
+		t.Errorf("nohost has no hostname: must not be exposed via softnet, got %+v", got)
+	}
+	if p := byGuest[22]; p.HostPort != 22 || p.BindIP != "127.42.0.1" {
+		t.Errorf("ssh: want host 22 bind 127.42.0.1, got %+v", p)
+	}
+	if p := byGuest[gdevmServePort]; p.HostPort != gdevmServePort || p.BindIP != "127.42.0.1" {
+		t.Errorf("gdevm-serve: want host %d bind 127.42.0.1, got %+v", gdevmServePort, p)
+	}
+	if p := byGuest[previewServePort]; p.HostPort != previewServePort || p.BindIP != "127.42.0.1" {
+		t.Errorf("preview: want host %d bind 127.42.0.1 (shares gdevm-serve's port), got %+v", previewServePort, p)
+	}
+	if p := byGuest[filestashServePort]; p.HostPort != filestashServePort || p.BindIP != "127.42.0.1" {
+		t.Errorf("filestash: want host %d bind 127.42.0.1, got %+v", filestashServePort, p)
+	}
+}
+
+// TestComputeExposeMap_AllServicesWithHostnameAndPortExposed pins the M6
+// fix: softnet exposes every service that declares hostname+port,
+// regardless of its `direct:` value. `direct:` only controls whether the
+// daemon's built-in ProxyServer HTTP-fronts the service; it no longer
+// gates whether softnet opens a listener at all.
+func TestComputeExposeMap_AllServicesWithHostnameAndPortExposed(t *testing.T) {
+	cfg := schema.Config{Services: schema.OrderedMapOf(map[string]schema.Service{
+		"web": {Port: 3000, Hostname: "web.test"},
+		"api": {Port: 4000, Hostname: "api.test"},
+	})}
+	got := computeExposeMap(cfg, "127.42.0.9")
+	if len(got) != 5 {
+		t.Fatalf("want web, api, ssh, gdevm-serve, and filestash exposed, got %d: %+v", len(got), got)
+	}
+	byGuest := map[int]softnet.ExposePort{}
+	for _, p := range got {
+		byGuest[p.GuestPort] = p
+	}
+	if p := byGuest[3000]; p.HostPort != 3000 || p.BindIP != "127.42.0.9" {
+		t.Errorf("web: want host 3000 bind 127.42.0.9, got %+v", p)
+	}
+	if p := byGuest[4000]; p.HostPort != 4000 || p.BindIP != "127.42.0.9" {
+		t.Errorf("api: want host 4000 bind 127.42.0.9, got %+v", p)
+	}
+	if p := byGuest[22]; p.HostPort != 22 || p.BindIP != "127.42.0.9" {
+		t.Errorf("ssh: want host 22 bind 127.42.0.9, got %+v", p)
+	}
+	if p := byGuest[gdevmServePort]; p.HostPort != gdevmServePort || p.BindIP != "127.42.0.9" {
+		t.Errorf("gdevm-serve: want host %d bind 127.42.0.9, got %+v", gdevmServePort, p)
+	}
+	if p := byGuest[filestashServePort]; p.HostPort != filestashServePort || p.BindIP != "127.42.0.9" {
+		t.Errorf("filestash: want host %d bind 127.42.0.9, got %+v", filestashServePort, p)
+	}
+}
+
+// TestComputeExposeMap_NonDirectServiceWithHostnameIsExposed pins the M6
+// fix: softnet must bind every service that declares hostname+port, not
+// only direct: true services. The `direct:` flag only controls whether
+// the daemon's built-in ProxyServer HTTP-fronts the service — it no
+// longer gates whether softnet exposes a listener at all.
+func TestComputeExposeMap_NonDirectServiceWithHostnameIsExposed(t *testing.T) {
+	cfg := schema.Config{Services: schema.OrderedMapOf(map[string]schema.Service{
+		"api": {Hostname: "api.test", Port: 8080}, // Direct not set → false
+	})}
+	got := computeExposeMap(cfg, "127.42.0.5")
+	want := []softnet.ExposePort{
+		{GuestPort: 22, BindIP: "127.42.0.5", HostPort: 22},
+		{GuestPort: 8080, BindIP: "127.42.0.5", HostPort: 8080},
+		{GuestPort: gdevmServePort, BindIP: "127.42.0.5", HostPort: gdevmServePort},
+		{GuestPort: filestashServePort, BindIP: "127.42.0.5", HostPort: filestashServePort},
+	}
+	assert.Equal(t, want, got)
+}
+
+func TestComputeExposeMap_SSHAlwaysPresent(t *testing.T) {
+	cfg := schema.Config{Services: schema.OrderedMapOf(map[string]schema.Service{
+		"db": {Port: 5432, Direct: true, Hostname: "db.test"},
+	})}
+	got := computeExposeMap(cfg, "127.42.0.3")
+	haveSSH := false
+	for _, p := range got {
+		if p.GuestPort == 22 {
+			haveSSH = true
+			if p.HostPort != 22 || p.BindIP != "127.42.0.3" {
+				t.Fatalf("ssh entry wrong shape: %+v", p)
+			}
+		}
+	}
+	if !haveSSH {
+		t.Fatalf("ssh must always be present, got %+v", got)
+	}
+	if len(got) != 4 {
+		t.Fatalf("want 4 (db + ssh + gdevm-serve + filestash), got %d: %+v", len(got), got)
+	}
+}
+
+func TestComputeExposeMap_BindsProjectIP(t *testing.T) {
+	cfg := schema.Config{
+		Project: schema.Project{Name: "myapp"},
+		Services: schema.OrderedMapOf(map[string]schema.Service{
+			"api": {Port: 3000, Hostname: "api.myapp.test"}, // not direct, but has hostname+port -> exposed
+			"db":  {Port: 5432, Hostname: "db.myapp.test", Direct: true},
+		}),
+	}
+	ports := computeExposeMap(cfg, "127.42.0.1")
+	require.Len(t, ports, 5) // api, db, ssh, gdevm-serve, filestash
+	for _, p := range ports {
+		assert.Equal(t, "127.42.0.1", p.BindIP, "bind IP for %d", p.GuestPort)
+	}
+	// SSH must be present at :22.
+	haveSSH := false
+	for _, p := range ports {
+		if p.GuestPort == 22 && p.HostPort == 22 {
+			haveSSH = true
+			break
+		}
+	}
+	assert.True(t, haveSSH, "expected an SSH entry on :22")
+}
+
+func TestComputeExposeMap_BindIPFieldIgnoredNowUsesProjectIP(t *testing.T) {
+	// V1 non-goal: per-service bind_ip (LAN exposure) is parsed but
+	// ignored — every entry binds on the project's allocated IP
+	// regardless of what the service declares.
+	cfg := schema.Config{Services: schema.OrderedMapOf(map[string]schema.Service{
+		"db": {Port: 5432, Direct: true, Hostname: "db.test", BindIP: "0.0.0.0"},
+	})}
+	got := computeExposeMap(cfg, "127.42.0.2")
+	for _, p := range got {
+		if p.GuestPort == 5432 {
+			assert.Equal(t, "127.42.0.2", p.BindIP)
+		}
+	}
+}
+
+// TestComputeDirectTestHosts pins the direct-host extraction: only services
+// with both Direct and a hostname, sorted for deterministic pushes.
+func TestComputeDirectTestHosts(t *testing.T) {
+	cfg := schema.Config{Services: schema.OrderedMapOf(map[string]schema.Service{
+		"db":    {Hostname: "db.test", Port: 5432, Direct: true},
+		"cache": {Hostname: "cache.test", Port: 6379, Direct: true},
+		"api":   {Hostname: "api.test", Port: 3000},
+		"jobs":  {Port: 9000, Direct: true}, // no hostname -> excluded
+	})}
+	got := computeDirectTestHosts(cfg)
+	want := []string{"cache.test", "db.test"}
+	if len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
+		t.Fatalf("= %v want %v", got, want)
+	}
+	if len(computeDirectTestHosts(schema.Config{})) != 0 {
+		t.Fatal("empty config must yield no hosts")
+	}
+}
+
+// TestPushExposeMap_ConflictRefusesDispatch pins the fail-loud contract:
+// when a second project's expose map collides with a first project's
+// already-claimed host port, pushExposeMap must return the conflict
+// error WITHOUT dispatching to softnet — so the colliding listener is
+// never bound and the project can never silently misroute another
+// project's hostname. Project "conflict-b" is given a socket path that
+// doesn't exist; if pushExposeMap dialed it, the error returned would be
+// a dial/connect failure, not the portClaims conflict message. Project
+// "conflict-a" needs a real listening socket registered — pushExposeMap
+// now loud-fails on an unregistered softnetState entry instead of
+// silently no-opping, so its "must succeed" push has to have somewhere
+// real to dial.
+func TestPushExposeMap_ConflictRefusesDispatch(t *testing.T) {
+	registerFakeSoftnet(t, "conflict-a")
+	t.Cleanup(func() {
+		exposeClaims.release("conflict-a")
+		exposeClaims.release("conflict-b")
+		softnetState.del("conflict-b")
+	})
+
+	ports := []softnet.ExposePort{{GuestPort: 5432, BindIP: "127.0.0.1", HostPort: 15432}}
+
+	if err := pushExposeMap("conflict-a", ports); err != nil {
+		t.Fatalf("first project's claim must succeed: %v", err)
+	}
+
+	softnetState.put("conflict-b", "/nonexistent/softnet.sock")
+	err := pushExposeMap("conflict-b", ports)
+	if err == nil {
+		t.Fatal("want conflict error when project b's map collides with a's claimed port, got nil")
+	}
+	if got := err.Error(); !containsAll(got, "127.0.0.1:15432", "conflict-a") {
+		t.Fatalf("want conflict error naming the key and owning project, got: %v", got)
+	}
+}
+
+// TestPushExposeMap_ErrorsWhenSoftnetStateEmpty pins the loud-fail
+// contract itself (as opposed to the conflict-detection test above,
+// which exercises it incidentally via "conflict-b"): an unregistered
+// softnetState entry — no /vm/start, no /vm/apply-iron-proxy, no
+// discoverSoftnet rehydration ever ran for this project — must return
+// an error, not the old silent no-op. Regression coverage for the
+// adopt-in-place gap where this silence hid a real bug (see
+// apply_iron_proxy.go's softnetState.put and its comment).
+func TestPushExposeMap_ErrorsWhenSoftnetStateEmpty(t *testing.T) {
+	t.Cleanup(func() { exposeClaims.release("never-registered") })
+
+	ports := []softnet.ExposePort{{GuestPort: 22, BindIP: "127.0.0.1", HostPort: 2222}}
+	err := pushExposeMap("never-registered", ports)
+	if err == nil {
+		t.Fatal("want an error when softnetState has no entry for the project, got nil")
+	}
+	if got := err.Error(); !strings.Contains(got, "softnet control socket not registered") {
+		t.Fatalf("want an error naming the missing registration, got: %v", got)
+	}
+}
+
+// TestPushTestHosts_ErrorsWhenSoftnetStateEmpty mirrors
+// TestPushExposeMap_ErrorsWhenSoftnetStateEmpty: an unregistered
+// softnetState entry — no /vm/start, no /vm/apply-iron-proxy, no
+// discoverSoftnet rehydration ever ran for this project — must return an
+// error, not the old silent no-op.
+func TestPushTestHosts_ErrorsWhenSoftnetStateEmpty(t *testing.T) {
+	err := pushTestHosts("never-registered", []string{"db.test"})
+	if err == nil {
+		t.Fatal("want an error when softnetState has no entry for the project, got nil")
+	}
+	if got := err.Error(); !strings.Contains(got, "no softnet control socket registered") {
+		t.Fatalf("want an error naming the missing registration, got: %v", got)
+	}
+}
+
+func containsAll(s string, substrs ...string) bool {
+	for _, sub := range substrs {
+		if !strings.Contains(s, sub) {
+			return false
+		}
+	}
+	return true
+}

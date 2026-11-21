@@ -1,0 +1,177 @@
+package config
+
+import (
+	"bytes"
+	"errors"
+	"fmt"
+	"io/fs"
+	"os"
+	"path/filepath"
+	"sort"
+
+	"github.com/mdubb86/devm/internal/schema"
+	"github.com/mdubb86/devm/internal/scriptfile"
+	"gopkg.in/yaml.v3"
+)
+
+// ErrNoConfig means dir has no devm.yaml at all. Callers that treat
+// "not in a project" as a benign mode (e.g. `devm status` daemon-only
+// output) must match on this sentinel — any other Load error means a
+// devm.yaml exists but is unreadable or invalid, and must be surfaced,
+// not swallowed as "no project here".
+var ErrNoConfig = errors.New("no devm.yaml")
+
+// strictDecode runs yaml.v3 with KnownFields(true) so ANY unknown key
+// — top-level, nested, or deeply nested — hard-fails with a yaml-native
+// error. Complements the friendlier CheckUnknownKeys pass above (which
+// fires first and covers the common top-level + project + network typos
+// with nicer messages), and closes the gap that pass leaves for nested
+// blocks (services.<name>.*, base_image.*, etc.).
+func strictDecode(data []byte, into any) error {
+	dec := yaml.NewDecoder(bytes.NewReader(data))
+	dec.KnownFields(true)
+	if err := dec.Decode(into); err != nil {
+		return err
+	}
+	return nil
+}
+
+// Load reads devm.yaml (required) and devm.me.yaml (optional) from dir,
+// validates each, deep-merges, and validates the result. Returns the
+// merged validated Config.
+func Load(dir string) (schema.Config, error) {
+	basePath := filepath.Join(dir, "devm.yaml")
+	baseBytes, err := os.ReadFile(basePath)
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return schema.Config{}, fmt.Errorf("%w in %s", ErrNoConfig, dir)
+		}
+		return schema.Config{}, fmt.Errorf("read %s: %w", basePath, err)
+	}
+	if err := schema.CheckUnknownKeys(baseBytes); err != nil {
+		return schema.Config{}, fmt.Errorf("%s: %w", basePath, err)
+	}
+	var base schema.Config
+	if err := strictDecode(baseBytes, &base); err != nil {
+		return schema.Config{}, fmt.Errorf("parse %s: %w", basePath, err)
+	}
+	// Functions must be populated before any Validate call: Validate
+	// checks every repos.<name>.commands and services.<name>.exec
+	// function reference against this set.
+	funcs, err := LoadFunctions(dir)
+	if err != nil {
+		return schema.Config{}, err
+	}
+	base.Functions = funcs
+	if err := base.Validate(); err != nil {
+		return schema.Config{}, fmt.Errorf("%s: %w", basePath, err)
+	}
+
+	overridePath := filepath.Join(dir, "devm.me.yaml")
+	var override schema.ConfigOverride
+	if _, err := os.Stat(overridePath); err == nil {
+		ovBytes, err := os.ReadFile(overridePath)
+		if err != nil {
+			return schema.Config{}, fmt.Errorf("read %s: %w", overridePath, err)
+		}
+		if err := schema.CheckUnknownKeys(ovBytes); err != nil {
+			return schema.Config{}, fmt.Errorf("%s: %w", overridePath, err)
+		}
+		if err := strictDecode(ovBytes, &override); err != nil {
+			return schema.Config{}, fmt.Errorf("parse %s: %w", overridePath, err)
+		}
+	}
+
+	merged, err := Merge(base, override)
+	if err != nil {
+		return schema.Config{}, fmt.Errorf("merge: %w", err)
+	}
+	// Validate against the project root so path-relative config
+	// (volumes, labels) can be checked against the host filesystem.
+	if err := merged.ValidateWithRoot(dir); err != nil {
+		return schema.Config{}, fmt.Errorf("merged config: %w", err)
+	}
+	// ResolveEnv: expand $WORKSPACE in cfg.Env + services[*].env values,
+	// reject reserved keys and unknown $VAR references, inject WORKSPACE
+	// + DEVM_SIDE. All downstream consumers (templates, EnvArgs,
+	// PersistentEnv, kit-env render) read the resolved cfg.Env.
+	//
+	// $WORKSPACE expands to the primary repo's GUEST path (e.g.
+	// /home/devm/<label>) — NOT the Mac cwd. Under mutagen-volumes the
+	// guest no longer mirrors the Mac's absolute path; every place
+	// $WORKSPACE surfaces is a guest-side context (devm.sh's install()/
+	// startup(), service envs) so it must resolve to a path the guest can
+	// chdir into. Repo-less projects fall back to /home/devm.
+	workspace := merged.PrimaryGuestPath(dir)
+	if workspace == "" {
+		workspace = schema.GuestHomeDir
+	}
+	if err := schema.ResolveEnv(&merged, workspace); err != nil {
+		return schema.Config{}, fmt.Errorf("resolve env: %w", err)
+	}
+
+	return merged, nil
+}
+
+// ReadProjectName parses devm.yaml at dir and returns only the
+// project.name field. Used by the CLI at entry to identify the project
+// without running full schema validation. Returns ErrNoConfig if the
+// file is absent.
+func ReadProjectName(dir string) (string, error) {
+	basePath := filepath.Join(dir, "devm.yaml")
+	body, err := os.ReadFile(basePath)
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return "", fmt.Errorf("%w in %s", ErrNoConfig, dir)
+		}
+		return "", fmt.Errorf("read %s: %w", basePath, err)
+	}
+	var probe struct {
+		Project struct {
+			Name string `yaml:"name"`
+		} `yaml:"project"`
+	}
+	if err := yaml.Unmarshal(body, &probe); err != nil {
+		return "", fmt.Errorf("parse %s: %w", basePath, err)
+	}
+	if probe.Project.Name == "" {
+		return "", fmt.Errorf("%s: missing project.name", basePath)
+	}
+	return probe.Project.Name, nil
+}
+
+// LoadFunctions reads devm.sh and devm.me.sh from dir and returns the
+// sorted, deduplicated union of top-level function names parsed from both
+// files. Missing files are silently skipped (no error). Returns a sorted
+// slice; the slice is nil only if neither file exists.
+//
+// Also used by the daemon-side propose validator: a bare strictDecode +
+// Validate on devm.yaml leaves Config.Functions empty, which then trips
+// validateFunctionReferences on every function reference. Callers that
+// validate a devm.yaml against the on-disk .sh files populate
+// Config.Functions from here first.
+func LoadFunctions(dir string) ([]string, error) {
+	set := map[string]struct{}{}
+	for _, name := range []string{"devm.sh", "devm.me.sh"} {
+		body, err := os.ReadFile(filepath.Join(dir, name))
+		if errors.Is(err, fs.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			return nil, fmt.Errorf("read %s: %w", name, err)
+		}
+		found, err := scriptfile.Parse(body)
+		if err != nil {
+			return nil, fmt.Errorf("parse %s: %w", name, err)
+		}
+		for _, f := range found {
+			set[f] = struct{}{}
+		}
+	}
+	out := make([]string, 0, len(set))
+	for f := range set {
+		out = append(out, f)
+	}
+	sort.Strings(out)
+	return out, nil
+}

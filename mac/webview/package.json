@@ -1,0 +1,29 @@
+{
+  "name": "devm-webview",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "node esbuild.config.mjs",
+    "dev": "node esbuild.config.mjs --watch",
+    "test": "vitest run",
+    "test:e2e": "playwright test --config test/e2e/playwright.config.ts"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.63.0",
+    "@sveltejs/vite-plugin-svelte": "4.0.4",
+    "@testing-library/svelte": "5.4.2",
+    "autoprefixer": "10.5.5",
+    "esbuild": "0.28.2",
+    "esbuild-svelte": "0.9.5",
+    "happy-dom": "20.14.3",
+    "postcss": "8.5.28",
+    "svelte": "5.57.0",
+    "svelte-preprocess": "6.0.5",
+    "tailwindcss": "3.4.19",
+    "typescript": "5.9.3",
+    "vitest": "2.1.9"
+  },
+  "dependencies": {
+    "bits-ui": "1.8.0"
+  }
+}

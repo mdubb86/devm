@@ -1,0 +1,118 @@
+// gdevm is the guest-side devm dispatcher: the only devm-owned binary
+// installed inside the VM. `devm` never exists on the guest and `gdevm`
+// never exists on the Mac — an agent's PATH tells it which side it is
+// on without ambiguity.
+//
+// Subcommands:
+//
+//	gdevm propose     [--reason <text>]
+//	gdevm run         <command>
+//	gdevm passthrough <duration> --reason <text>
+//	gdevm upgrade
+//	gdevm recipes     list | get <name> | asset ls <name> | asset get <name> <path>
+//	gdevm snapshot    create <name> | restore <name> [<ts>] | list [<name>] |
+//	                  prune <name> --keep <N> | show <name> [<ts>]
+//	gdevm serve
+//	gdevm ssh-agent-bridge --sock <path> --mac-host <ip> --mac-port <int>
+//
+// Each subcommand reaches the Mac-side daemon over softnet (propose,
+// passthrough) or reads the local guest command manifest
+// and re-execs bash (run). The per-subcommand main body is factored
+// into <sub>Main funcs so tests exercise them without spawning a
+// subprocess. `serve` is the exception: it's a long-running guest-side
+// daemon rather than a one-shot command.
+package main
+
+import (
+	"fmt"
+	"os"
+)
+
+func main() {
+	if len(os.Args) < 2 {
+		usage()
+		os.Exit(2)
+	}
+	sub := os.Args[1]
+	args := os.Args[2:]
+	switch sub {
+	case "pop":
+		os.Exit(popMain(args))
+	case "propose":
+		os.Exit(proposeMain(args))
+	case "run":
+		os.Exit(runMain(args))
+	case "stop":
+		os.Exit(stopMain(args))
+	case "runs":
+		os.Exit(runsMain(args))
+	case "logs":
+		os.Exit(logsMain(args))
+	case "passthrough":
+		os.Exit(passthroughMain(args))
+	case "upgrade":
+		os.Exit(upgradeMain(args))
+	case "recipes":
+		os.Exit(recipesMain(args))
+	case "snapshot":
+		os.Exit(snapshotMain(args))
+	case "serve":
+		os.Exit(serveMain(args))
+	case "ssh-agent-bridge":
+		os.Exit(sshAgentBridgeMain(args))
+	case "-h", "--help", "help":
+		usage()
+	default:
+		fmt.Fprintf(os.Stderr, "gdevm: unknown subcommand %q\n\n", sub)
+		usage()
+		os.Exit(2)
+	}
+}
+
+func usage() {
+	fmt.Fprintln(os.Stderr, `gdevm — guest-side devm dispatcher
+
+Usage: gdevm <subcommand> [args...]
+
+Subcommands:
+  pop          Open a file on the Mac. Default: filestash URL in the
+               Mac's browser. --native: macOS `+"`open`"+` on the mirrored
+               Mac file (or a scratch cp when the file is out of mirror).
+  propose      Signal that a devm.yaml (or devm.me.yaml, devm.sh,
+               devm.me.sh) edit is ready for the Mac-side reviewer.
+  run          Invoke a named function from this project's command
+               manifest. The function runs as a child of gdevm serve
+               so its lifetime is independent of your shell. Flags:
+               -d/--detach returns immediately after start. Without
+               -d, output streams back and the client's exit code
+               tracks the function's.
+  stop         Stop a named run: SIGTERM its process group, 5s
+               grace, SIGKILL.
+  runs         List active (or recently exited) runs.
+  logs         Print a run's merged stdout+stderr log. -f/--follow
+               tails as new output arrives.
+  passthrough  Request a supervised egress passthrough window. The
+               human on the Mac side runs `+"`devm passthrough approve`"+`
+               to authorize it before it opens.
+  upgrade      Pull down the daemon's current gdevm binary,
+               env template, and commands manifest into this VM.
+               No args.
+  recipes      Query the Mac-side recipes catalog:
+                 recipes list
+                 recipes get <name>
+                 recipes asset ls <name>
+                 recipes asset get <name> <path>
+  snapshot     Drive per-entry snapshots declared in devm.yaml:
+                 snapshot create <name>
+                 snapshot restore <name> [<ts>]
+                 snapshot list [<name>]
+                 snapshot prune <name> --keep <N>
+                 snapshot show <name> [<ts>]
+  serve        Run the guest-side state daemon in the foreground.
+               Long-running; exits on SIGTERM/SIGINT. No args.
+  ssh-agent-bridge   Guest-side ssh-agent proxy. Listens on --sock,
+                     forwards each connection to --mac-host:--mac-port.
+                     Long-running; managed by systemd. No user-facing.
+
+Every subcommand carries its own -h/--help.`)
+}

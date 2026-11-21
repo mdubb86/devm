@@ -1,0 +1,529 @@
+package serviceapi
+
+import (
+	"context"
+	"fmt"
+	"log"
+	"net"
+	"os"
+	"time"
+
+	"github.com/oklog/run"
+
+	"github.com/mdubb86/devm/internal/daemonlog"
+	"github.com/mdubb86/devm/internal/identity"
+	"github.com/mdubb86/devm/internal/sandbox/tart"
+	"github.com/mdubb86/devm/internal/secret"
+	"github.com/mdubb86/devm/internal/supervisor"
+)
+
+// rebindBackoff is the wait before each retry attempt (the first
+// attempt is immediate). Three attempts total, matching the
+// launchdBootstrapBackoff pattern.
+var rebindBackoff = []time.Duration{0, 500 * time.Millisecond, 1500 * time.Millisecond}
+
+// helperReadinessTimeout is the max time waitForHelperReady blocks
+// before proceeding. Retry in rebindProjectListeners covers slow
+// helpers past this window.
+const helperReadinessTimeout = 2 * time.Second
+
+// waitForHelperReady blocks until a UDS dial to socketPath succeeds
+// or timeout elapses. Best-effort; a timeout is not fatal — the
+// retry loop in rebindProjectListeners covers late-arriving helper.
+func waitForHelperReady(ctx context.Context, socketPath string, timeout time.Duration) {
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if err := ctx.Err(); err != nil {
+			return
+		}
+		c, err := net.DialTimeout("unix", socketPath, 200*time.Millisecond)
+		if err == nil {
+			c.Close()
+			return
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(50 * time.Millisecond):
+		}
+	}
+}
+
+// rebindProjectListeners calls proxy.StartProjectListeners for one
+// project with bounded retry. Returns the final RebindStatus (also
+// recorded on proxy). Called concurrently, one goroutine per
+// recovered project.
+//
+// On success it also rebinds the guest-origin listener pair and
+// re-pushes ENFORCED so softnet learns the fresh ports. Ordering
+// hazard: discoverSoftnet (called earlier in the daemon-restart
+// sequence, before this goroutine's retry loop even starts) already
+// pushed ENFORCED with zero-valued guest targets, since the
+// guest-origin pair didn't exist yet at that point — this push
+// corrects it once the pair is bound. Both the guest-origin bind and
+// the re-push are best-effort: logged on failure rather than folded
+// into the returned RebindStatus, matching the surrounding
+// best-effort restart semantics.
+func rebindProjectListeners(ctx context.Context, proxy *ProxyServer, cfg identity.Config, projectID, projectIP string, ntpPort int) RebindStatus {
+	proxy.RecordRebindStatus(projectID, RebindStatus{State: RebindPending, Attempts: 0})
+	var lastErr error
+	for i, backoff := range rebindBackoff {
+		if backoff > 0 {
+			select {
+			case <-ctx.Done():
+				s := RebindStatus{State: RebindFailed, Attempts: i, LastError: "context canceled"}
+				proxy.RecordRebindStatus(projectID, s)
+				return s
+			case <-time.After(backoff):
+			}
+		}
+		attempts := i + 1
+		proxy.RecordRebindStatus(projectID, RebindStatus{State: RebindPending, Attempts: attempts})
+		err := proxy.StartProjectListeners(ctx, projectID, projectIP)
+		if err == nil {
+			guestHTTPPort, guestHTTPSPort, gerr := proxy.StartGuestOriginListeners(ctx, projectID, projectIP)
+			if gerr != nil {
+				daemonlog.Errorf("serviceapi: guest-origin rebind for %s: %v", projectID, gerr)
+			} else {
+				info, ok := ironProxyState.get(projectID)
+				if ok {
+					info.GuestHTTPPort = guestHTTPPort
+					info.GuestHTTPSPort = guestHTTPSPort
+
+					// Rebind this project's devm-jump + agent-bridge
+					// listeners for ssh-enabled projects. Must land
+					// BEFORE the setPolicy push below so endpointFrom's
+					// info.MacPorts read (via macPortsForProject in
+					// peers.go) picks up the fresh jump + bridge ports.
+					// Failures bail this attempt loud — a bad or missing
+					// ssh config is a user config error the retry loop
+					// won't resolve.
+					if sshErr := rebindSSHJump(ctx, proxy, cfg, projectID, &info); sshErr != nil {
+						s := RebindStatus{State: RebindFailed, Attempts: attempts, LastError: sshErr.Error()}
+						proxy.RecordRebindStatus(projectID, s)
+						daemonlog.Errorf("serviceapi: sshjump rebind: project %s FAILED: %v", projectID, sshErr)
+						return s
+					}
+
+					ironProxyState.put(projectID, info)
+					if sock, ok := softnetState.get(projectID); ok {
+						if err := newSoftnetClient(sock).setPolicy("FORWARDING", endpointFrom(projectID, info, ntpPort, cfg.TLD)); err != nil {
+							daemonlog.Errorf("serviceapi: guest-origin re-push for %s: %v", projectID, err)
+						}
+					}
+					// Fan the fresh ports out to every project that lists
+					// me as a peer: their softnet pulls peer-hairpin
+					// targets from endpointFrom, which reads the just-
+					// updated GuestHTTP(S)Port out of ironProxyState.
+					propagatePeerRebind(projectID, ntpPort, cfg.TLD)
+				}
+			}
+			s := RebindStatus{State: RebindOK, Attempts: attempts}
+			proxy.RecordRebindStatus(projectID, s)
+			return s
+		}
+		lastErr = err
+	}
+	s := RebindStatus{State: RebindFailed, Attempts: len(rebindBackoff), LastError: lastErr.Error()}
+	proxy.RecordRebindStatus(projectID, s)
+	daemonlog.Errorf("serviceapi: rebind: project %s FAILED after %d attempts: %v", projectID, len(rebindBackoff), lastErr)
+	return s
+}
+
+// rebindSSHJump reads this project's state snapshot, and if its
+// cfg.ssh list is non-empty, re-resolves the ssh targets,
+// re-verifies known_hosts, and re-binds the devm-jump + agent-bridge
+// listeners via applySSHJumpBind. On success, refreshes info.MacPorts
+// so the caller's upcoming ironProxyState.put carries the newly bound
+// jump + bridge ports into the softnet FORWARDING push that follows
+// (endpointFrom reads info.MacPorts).
+//
+// A missing or nil-SSH snapshot is a no-op. A bad `ssh -G` resolution,
+// a missing known_hosts entry, or a bind failure returns the error
+// unchanged — the brief's plan says loud-fail at rebind for a user
+// config error since the retry loop above can't repair it.
+func rebindSSHJump(ctx context.Context, proxy *ProxyServer, cfg identity.Config, projectID string, info *projectInfo) error {
+	snap, err := ReadStateSnapshot(cfg, projectID)
+	if err != nil {
+		return fmt.Errorf("ssh rebind: read snapshot: %w", err)
+	}
+	if snap == nil || snap.Cfg.SSH == nil || len(*snap.Cfg.SSH) == 0 {
+		return nil
+	}
+	if err := applySSHJumpBind(ctx, proxy, cfg.RuntimeDir(), snap.Cfg, info); err != nil {
+		return fmt.Errorf("ssh rebind: %w", err)
+	}
+	return nil
+}
+
+// RunService composes the service's goroutines into an oklog/run
+// group and blocks until any actor returns. Ship 1 only ran the
+// HTTP server; Ship 2 added DNS; Ship 3 adds the reverse proxy on
+// launchd-inherited :80 and :443.
+//
+// cfg is the daemon's compile-time identity (TLD, runtime dir, pool
+// range, CA CN, base image name — prod vs. e2e). build is the
+// daemon's build identity, reported via /version. ctx is the
+// shutdown signal: cancel it and every actor stops.
+func RunService(ctx context.Context, cfg identity.Config, build Build) error {
+	if _, err := EnsureRuntimeDir(cfg); err != nil {
+		return fmt.Errorf("ensure runtime dir: %w", err)
+	}
+
+	// tart wrapper — daemon-scoped singleton, needed immediately below
+	// for orphan GC and later for VM lifecycle endpoints (Ship 4) and
+	// the adopt pass.
+	tr := tart.New()
+
+	// Orphan GC — before any adopt pass runs. AdoptIronProxies only
+	// stops orphaned processes it discovers via `ps`; a project whose
+	// iron-proxy process is already dead but whose state file survives
+	// is invisible to that pass and would otherwise sit in StateDir
+	// forever, rehydrated every boot and respawned by the watchdog every
+	// tick. See GCOrphanedProjects. Best-effort: a `tart list` failure
+	// here must never block daemon startup — GCOrphanedProjects already
+	// fails closed (does nothing) on that error, so this only logs it.
+	if err := GCOrphanedProjects(ctx, cfg, tr); err != nil {
+		daemonlog.Errorf("serviceapi: orphan gc: %v", err)
+	}
+
+	// CA — generates the root on first launch, persists, reloads later.
+	ca, err := LoadOrGenerate(cfg)
+	if err != nil {
+		return fmt.Errorf("ca: %w", err)
+	}
+
+	// Wire the daemon-wide policy authority to the on-disk secret
+	// store so the egress gate can check path-substituted secret
+	// values. One backend per daemon; it is read-only from the
+	// gate's point of view (the CLI's `devm secret set` writes).
+	policyAuthority.UseSecretBackend(secret.NewFileBackend(cfg.SecretsDir()))
+	log.Printf("policy: secret backend wired (%s)", cfg.SecretsDir())
+
+	// Routes table — empty on startup; CLI populates via admin API.
+	routes := NewRoutes(cfg.TLD)
+
+	// Reverse proxy (Ship 3, per-project since B3). Binds one HTTP +
+	// one HTTPS listener per active project's ProjectIP, lazily via
+	// /vm/start (RegisterVMHandlers below) — no launchd-inherited
+	// sockets and no listeners at daemon startup for a project that
+	// isn't running.
+	proxy := NewProxyServer(cfg, routes, ca)
+
+	// Wire devmbundle.SSHEnricher so every BuildInputFor call picks up
+	// SSH client config, jump key, known_hosts and agent-bridge unit
+	// bytes for projects whose cfg.ssh is non-empty. The closure
+	// captures proxy — BuildInputFor itself lives in a package that
+	// can't import serviceapi, so passing a *ProxyServer would create
+	// a cycle.
+	BindSSHBundleEnricher(proxy)
+
+	// HTTP API server (Ship 1) with the /routes/* admin endpoints
+	// registered on top.
+	server := NewServer(cfg.SocketPath(), build)
+	RegisterRoutesHandlers(server, cfg, routes, proxy)
+
+	// VM lifecycle endpoints (Ship 4). Supervisor and tart wrapper (tr,
+	// constructed above for orphan GC) are daemon-scoped singletons;
+	// the supervisor manages the per-project VM processes and survives
+	// across CLI invocations.
+	sup := supervisor.New(cfg.LogDir())
+	// Per-project mutex for every state-mutating VM endpoint (start,
+	// stop, teardown, reconcile). Serializes concurrent same-project
+	// calls inside the daemon instead of relying on the CLI-side flock.
+	locks := NewProjectLocks()
+
+	// SNTP responder — one daemon-wide instance, bound eagerly so /vm/start
+	// (and discoverSoftnet, below) know the port when they build a softnet
+	// endpoint. Under ENFORCED policy, softnet forwards the guest's
+	// outbound UDP:123 (timesyncd) to this port; we answer from the host's
+	// wall clock. This is what heals guest-clock drift after a Mac sleep —
+	// external NTP isn't reachable because our egress firewall doesn't
+	// proxy UDP, but the Mac itself is always time-correct. Bound ahead of
+	// AdoptIronProxies/discoverSoftnet so its port is ready for the
+	// restart-adopt reconcile pass.
+	ntp, err := NewNTPServer()
+	if err != nil {
+		return fmt.Errorf("start ntp responder: %w", err)
+	}
+
+	// Install the tart-mutagen-ssh shim before the mutagen daemon starts —
+	// SpawnMutagen points MUTAGEN_SSH_PATH at this directory, so it must
+	// exist before AdoptMutagenDaemon spawns or respawns the daemon
+	// below. Not best-effort: the mutagen daemon can't reach the guest
+	// over the tart transport without it.
+	sshDir, err := EnsureTartMutagenSSH(cfg)
+	if err != nil {
+		return fmt.Errorf("mutagen ssh shim: %w", err)
+	}
+	log.Printf("mutagen: shim installed at %s", sshDir)
+
+	// Adopt (or spawn) the mutagen daemon. Unlike iron-proxy, mutagen is
+	// a single daemon-wide process, not per-project — it's adopted here,
+	// ahead of the per-project iron-proxy adopt pass, since no project
+	// state depends on it. Best-effort: a failure (e.g. lsof missing)
+	// shouldn't block daemon startup; the watchdog actor below retries.
+	//
+	// cache is nil here: it's constructed further down (Startup ordering
+	// constraint — cache + watchdog come up AFTER this adopt pass). The
+	// synchronous warmup pass right after construction reconciles the
+	// PID this adopt just set, so the cache is warm before the HTTP
+	// server accepts its first connection either way.
+	if err := AdoptMutagenDaemon(ctx, cfg, sup, nil); err != nil {
+		fmt.Fprintf(os.Stderr, "mutagen adopt: %v\n", err)
+	}
+
+	// Wipe any pop scratch dir left by a prior daemon instance — its
+	// cp'd files are one-shot and not expected to survive a restart.
+	// Best-effort: a wipe failure shouldn't block daemon startup.
+	if err := WipePopScratchOnStartup(cfg); err != nil {
+		daemonlog.Errorf("serviceapi: wipe pop-tmp on startup: %v", err)
+	}
+
+	// mutagen binary for the mutagen-monitor subscriber below. Calling
+	// mutagenEnsureFn again here is cheap — it's idempotent and the
+	// adopt pass above may not have reached it if AdoptMutagenDaemon
+	// failed.
+	mutagenBin, err := mutagenEnsureFn(cfg.RuntimeDir())
+	if err != nil {
+		return fmt.Errorf("mutagen: extract binary for monitor: %w", err)
+	}
+
+	// Adopt iron-proxy processes left running by a prior daemon
+	// instance. They survive daemon death by design (setsid on
+	// spawn); re-attaching here means /vm/stop and /vm/status
+	// behave correctly post-restart instead of orphaning them. It
+	// also re-stashes each recovered project's VM IP and rebuilds its
+	// direct routes (both otherwise lost on restart), so direct-service
+	// DNS keeps working for a VM that's still running.
+	// Best-effort — a failure (e.g., `ps` missing) shouldn't
+	// block daemon startup.
+	if err := AdoptIronProxies(ctx, cfg, sup, tr, routes); err != nil {
+		fmt.Fprintf(os.Stderr, "iron-proxy adopt: %v\n", err)
+	}
+
+	// Bind the LAN listener if the adopt+rehydrate pass above recovered
+	// any ExposeHost routes — otherwise a recovered project's LAN
+	// dispatch would stay dark until the next `devm reconcile` or
+	// `devm shell` re-applies its routes. Best-effort: a bind failure
+	// here (port taken) shouldn't block daemon startup; it'll retry on
+	// the next Apply/Remove reconcile.
+	if err := reconcileLAN(ctx, proxy, routes, LANDispatchPort); err != nil {
+		daemonlog.Errorf("serviceapi: startup LAN reconcile: %v", err)
+	}
+
+	// Reap softnet processes left behind by a daemon that crashed or was
+	// killed mid-project (before /vm/stop's shutdownSoftnet could reach
+	// them) — see ReapOrphanSoftnets. Never touches a softnet still
+	// serving a live VM: only PPID==1 (parent tart-run already exited)
+	// qualifies. Runs in the background; must not block startup.
+	ReapOrphanSoftnets(ctx, cfg)
+
+	// Rehydrate softnetState for every project AdoptIronProxies just
+	// recovered, and best-effort re-push ENFORCED so the daemon's view
+	// and softnet's own policy reconcile after a restart. Must run after
+	// AdoptIronProxies — it walks ironProxyState, which the adopt pass
+	// above just populated.
+	discoverSoftnet(ctx, cfg, ntp.Port())
+
+	// StateCache — the daemon's single authoritative in-memory model
+	// of every project's state. RealGroundTruth wraps the daemon's
+	// singletons (tart, supervisor, proxy) so each Check can observe
+	// reality without reaching for daemon globals directly. Locks
+	// must be set — RealGroundTruth.
+	// RespawnIronProxy takes the per-project reconcile lock so a
+	// watchdog-driven respawn can't race a concurrent /vm/start or
+	// /vm/reconcile; leaving it nil nil-derefs on first drift.
+	cache := NewStateCache()
+	cache.SetBuild(build)
+
+	// Rehydrate per-project cache fields that /vm/start writes once and
+	// no watchdog check reconciles. Currently only MacCwd — without
+	// this, running-VM projects survive daemon restart but every
+	// gdevm-initiated propose / passthrough call returns 412 "project
+	// not started" because the precondition check reads cache.MacCwd,
+	// which stays empty across the restart otherwise.
+	rehydrateCacheFromStateSnapshots(cfg, cache, ironProxyState.keys())
+	gt := &RealGroundTruth{
+		Cfg: cfg, Tart: tr, Sup: sup, Proxy: proxy,
+		Locks: locks, NtpPort: ntp.Port(),
+	}
+	checks := []Check{
+		NewIronProxyCheck(),
+		NewMutagenCheck(),
+		NewVMCheck(),
+		NewApproveCheck(),
+		NewProxyListenerCheck(),
+	}
+	sw := NewStateWatchdog(cache, gt, checks, 60*time.Second)
+
+	// Synchronous warmup: run every check once before the HTTP server
+	// accepts its first connection, so no request ever reads a cold
+	// cache. Bounded so a single hung check (e.g. a stuck `tart list`)
+	// can't stall daemon startup indefinitely — RunOnce doesn't return
+	// an error (only a drift count), so a timeout here isn't fatal;
+	// each check logs its own errors and the watchdog actor below
+	// retries every 60s regardless.
+	warmupCtx, warmupCancel := context.WithTimeout(ctx, 30*time.Second)
+	sw.RunOnce(warmupCtx)
+	warmupCancel()
+
+	// Surface devm VMs the daemon has lost track of (running, devm
+	// sidecar artifacts on disk, no state snapshot) — their softnets
+	// squat pool IP binds invisibly. Goroutine: tart list can take
+	// seconds and must not stall daemon startup.
+	go reportOrphanVMs(ctx, cfg, tr)
+
+	// When there are recovered projects to rebind, wait briefly for the
+	// helper socket — otherwise skip the gate so first-boot (no projects)
+	// doesn't pay the readiness latency. Both daemon and helper get
+	// bootstrapped by the same install script, so the daemon can win the
+	// race here and see "connection refused" on BindTCP. Timeout is
+	// bounded; the retry loop below covers late helpers.
+	ids := ironProxyState.keys()
+	if len(ids) > 0 {
+		waitForHelperReady(ctx, cfg.HelperSocketPath, helperReadinessTimeout)
+	}
+
+	// Re-bind this daemon's own per-project HTTP/HTTPS proxy listeners
+	// for every project AdoptIronProxies just recovered. Per-project
+	// goroutines with a bounded retry — a transient helper hiccup
+	// won't strand :80/:443 for the daemon's lifetime.
+	//
+	// Alongside :80/:443, also re-bind the per-project propose TCP
+	// listener and re-push softnet's forward-target map so guest-
+	// initiated flows (gdevm propose / passthrough / upgrade /
+	// recipes) survive a daemon restart. Softnet child processes stay
+	// alive with their old forward-target ports pointing at the dead
+	// daemon's listeners otherwise, and every guest call returns
+	// connection-refused until `devm stop && devm start` per project.
+	for _, id := range ids {
+		info, ok := ironProxyState.get(id)
+		if !ok || info.ProjectIP == "" {
+			continue
+		}
+		// Bind the guest-API listener synchronously FIRST — that pins
+		// GuestAPIPort into ironProxyState before rebindProjectListeners'
+		// async goroutine gets a chance to do its own read-modify-write
+		// (guest-origin ports). Since projectInfoStore's get + modify +
+		// put is not atomic across callers, doing the fast synchronous
+		// write first eliminates the theoretical race where
+		// rebindProjectListeners' goroutine reads the store before my
+		// write and clobbers GuestAPIPort with zero when it writes back.
+		if err := bindSoftnetListenersForAdopt(ctx, cfg, cache, tr, locks, id, ntp.Port()); err != nil {
+			daemonlog.Errorf("serviceapi: adopt-rebind softnet listeners for %s: %v", id, err)
+		}
+		go rebindProjectListeners(ctx, proxy, cfg, id, info.ProjectIP, ntp.Port())
+	}
+
+	server.SetStateCache(cache)
+	RegisterVMHandlers(server, cfg, sup, tr, ntp.Port(), locks, proxy, routes, cache)
+	RegisterReconcileHandler(server, cfg, cache, locks, &realApplyLiver{tr: tr}, &realPackagesApplier{tr: tr}, tr, sup, proxy, ntp.Port())
+	RegisterApplyIronProxyHandler(server, cfg, locks, sup, proxy)
+	RegisterHandshakeHandler(server, cache)
+	RegisterStatusAllHandler(server, cfg, tr, cache)
+	RegisterWorkspacesHandler(server, cfg)
+	RegisterSnapshotHandlers(server, cfg, cache, tr)
+
+	var g run.Group
+
+	// HTTP API server actor (Ship 1).
+	{
+		serverCtx, cancel := context.WithCancel(ctx)
+		g.Add(func() error {
+			return server.Serve(serverCtx)
+		}, func(error) {
+			cancel()
+		})
+	}
+
+	// DNS server actor (Ship 2).
+	{
+		dnsCtx, cancel := context.WithCancel(ctx)
+		dnsServer := NewDNSServer(cfg,
+			func(project string) (string, bool) {
+				info, ok := ironProxyState.get(project)
+				if !ok || info.ProjectIP == "" {
+					return "", false
+				}
+				return info.ProjectIP, true
+			},
+			routes.FindOwningProject,
+		)
+		g.Add(func() error {
+			return dnsServer.Serve(dnsCtx)
+		}, func(error) {
+			cancel()
+		})
+	}
+
+	// SNTP responder actor. The listener is already bound in NewNTPServer
+	// above so /vm/start could read the port immediately; here we start
+	// the read loop.
+	{
+		ntpCtx, cancel := context.WithCancel(ctx)
+		g.Add(func() error {
+			return ntp.Serve(ntpCtx)
+		}, func(error) {
+			cancel()
+		})
+	}
+
+	// Bundle drift catchup: a VM that was left running while the daemon
+	// was upgraded still has the previous build's gdevm /
+	// env-template bytes. Refresh every running project whose stored
+	// BundleFingerprint doesn't match the current one before the daemon
+	// announces itself ready, so the first `devm status` after boot
+	// reflects settled state.
+	BundleDriftCatchup(cfg, cache, tr, locks)
+
+	// State watchdog: reconciles the daemon's state cache against ground
+	// truth every 60s, respawning subsystems (iron-proxy, mutagen) whose
+	// repair policy calls for it. See watchdog_check_*.go for each check.
+	{
+		wCtx, cancel := context.WithCancel(ctx)
+		g.Add(func() error {
+			return sw.Run(wCtx)
+		}, func(error) {
+			cancel()
+		})
+	}
+
+	// Mutagen monitor subscriber: streams `mutagen sync monitor` and
+	// reflects each session's real state into cache.MutagenHealth
+	// within its own redraw cadence (seconds), rather than waiting for
+	// the mutagen watchdog check's 60s tick — which, after this actor
+	// exists, only validates the daemon's own PID (see
+	// watchdog_check_mutagen.go).
+	{
+		monitorCtx, cancel := context.WithCancel(ctx)
+		g.Add(func() error {
+			subscribeMutagenMonitor(monitorCtx, mutagenBin, cfg, cache)
+			return nil
+		}, func(error) {
+			cancel()
+		})
+	}
+
+	// Context-cancel actor: when ctx is cancelled (parent signal),
+	// the group returns. Also tears down every project's per-project
+	// HTTP/HTTPS proxy listeners so a graceful daemon exit doesn't leak
+	// bound ports — there's no oklog/run actor for the proxy anymore to
+	// do this via its own interrupt func.
+	{
+		ctxCancel := make(chan struct{})
+		g.Add(func() error {
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-ctxCancel:
+				return nil
+			}
+		}, func(error) {
+			close(ctxCancel)
+			proxy.StopAll()
+		})
+	}
+
+	return g.Run()
+}

@@ -1,0 +1,165 @@
+---
+name: errors
+description: Debugging devm — failure shapes from the daemon, the provisioner, and the VM. Use when devm start fails to bring a VM up, devm shell can't attach, or something inside the VM isn't reachable.
+---
+
+# Debugging devm
+
+Failures fall into three layers. Identifying the layer narrows the search to the right log.
+
+## Three layers of failure
+
+| Layer | When it fails | Symptom |
+|---|---|---|
+| **Daemon** | Before the VM starts | `devm start` (or `devm shell`) prints `query vm status: ...` or another pre-VM error |
+| **Provisioner** | VM started; provisioning (cold start or warm restart) failed | Output contains `::devm:stage:<name>::` markers followed by `provision: provision stage "<name>": ...` |
+| **Workload** | Provision succeeded; code in the VM can't reach something | Connection refused, DNS failure, or HTTPS cert error inside the VM |
+
+---
+
+## Daemon failures
+
+`devm start` (and `devm shell`) contacts the daemon over a local socket before doing anything else. If the daemon is not running:
+
+```
+query vm status: <detail>
+```
+
+Check daemon state:
+
+```
+devm service status
+```
+
+Prints `running`, `stopped`, or `not installed`. If stopped:
+
+```
+devm service start
+```
+
+If the daemon fails to stay up, check the error log:
+
+```
+tail -n 50 ~/Library/Logs/com.devm.service.err.log
+```
+
+Other pre-VM errors from `devm start`:
+
+| Error prefix | Cause | Fix |
+|---|---|---|
+| `render devm dir: ...` | `devm.yaml` failed to render (bad template variable or YAML parse error) | Fix the YAML and retry |
+| `resolve secrets: missing secrets: [<name>] ...` | A `!secret` reference has no matching file in the on-disk secret store | Run `devm secret set <name>` for each listed name; see `devm skills get secrets` |
+| `start vm: ...` | Daemon rejected the `StartVM` call | Check daemon log at `~/Library/Logs/com.devm.service.err.log` |
+| `vm did not become ready: timeout waiting for vm <name> to become exec-ready` | VM did not accept exec connections within 60 seconds | Run `tart list` to check VM state; daemon log may have more detail |
+| `error: approve required` (exit 2, with the daemon's multi-line message) | `devm.yaml` (or `devm.me.yaml`) diverged from the last-approved snapshot | Click the menu bar icon → Review, or run `devm approve` |
+
+---
+
+## Repo hydration failures
+
+Repo hydration (`git clone` inside the guest, for `repos:` entries) runs at the `repo-clone` stage, right after `volume-sync` establishes the mutagen sessions and before `install()`/`startup()` run — it's neither a daemon-startup nor an in-guest provisioner-stage failure, but a cold-start failure here still tears down the VM like any other.
+
+- **Missing secret.** `repos.<name>.secret` names a secret not in the store — cold-start aborts before the clone runs; the error names the missing secret. Fix: `devm secret set <name>`.
+- **Clone auth failure (401).** Usually a missing iron-proxy substitution rule or an expired token. Cold-start aborts and the VM is torn down; the error names the repo URL. Fix: confirm `repos.<name>.secret` holds a token with clone access to that repo.
+- **Wrong URL / network failure.** Same abort-and-teardown shape; the error surfaces git's raw stderr. Fix: check the URL, or `devm denials` if it looks like a network block.
+- **In-sync guard rejection.** The clone only fires when both the Mac mirror and the guest target are empty. If either side already has content, the guard compares entry count, total size, and a hash of each side's sorted top-100 paths; any mismatch is rejected rather than guessing which side is authoritative, with `in-sync guard failed for <label>: <reason>`. Fix: align the two sides by hand (clear the stale one, or accept the divergence) and re-run `devm start`.
+
+---
+
+## Provisioner failures
+
+After the VM starts, provisioning walks a series of stages. Each stage emits a marker (`::devm:stage:<name>::`) that drives the `devm start` spinner. Iron-proxy runs in `passthrough` authority mode through the `open`→`startup` stages (MITM'd, audited, secret-substituted, but not allowlist-gated) and flips to `restricted` at `enforce`, so user services always come up under the enforced allowlist. Softnet stays in `FORWARDING` throughout — iron-proxy is the authority.
+
+Any failing command aborts provisioning immediately. On failure the error line is:
+
+```
+provision: provision stage "<name>": provisioning script exited <N>
+```
+
+`<name>` is the LAST stage marker reached before the abort. `<N>` is the exit code — e.g. `124` means a `timeout`-wrapped `install()`/`startup()` body was killed for exceeding its budget. The output immediately above the error line is the captured non-marker stdout/stderr from the run; read that first.
+
+### Stage reference
+
+| Stage | What it does | Common failure | Fix |
+|---|---|---|---|
+| `open` | Marker for the start of the provisioning window (iron-proxy is in the path under `passthrough` authority mode — MITM'd, audited, secret-substituted, but not allowlist-gated). Runs whenever there's provisioning-window work to do (first boot, a `startup()` function, or templates); skipped on a warm restart with nothing to run. | Rare | n/a |
+| `packages` | `apt-get update` + `apt-get install -y <packages>` on first boot; on a later boot, converges only the added/removed packages if `packages:` changed while stopped. Skipped if there's nothing to do. Runs under `passthrough` authority — `network.allow` is NOT gating here. | Package name typo, or apt mirror hiccup (iron-proxy still MITMs and logs the reach, so denial counters won't fire — this is a package-level failure, not a network one) | Verify package names in `devm.yaml`; read the captured output for the exact apt line that failed |
+| `install` | Runs the `install()` function's body from `devm.sh` (if defined), with `$WORKSPACE`, `cfg.env`, and `path:` in scope (first boot only). Has a 600s timeout, overridable via `DEVM_INSTALL_STEP_TIMEOUT_S`. | The function exits non-zero, or exceeds its timeout (exit 124) | Read the captured output above the error; fix the failing command. For long installs, raise `DEVM_INSTALL_STEP_TIMEOUT_S`. |
+| `docker` | Installs the Docker engine + shim (only when `docker.enabled: true`; first boot only) | Docker install failure | Read the captured output; if `network.allow` is missing a Docker registry host, add it |
+| `templates` | Renders every `services[*].templates` entry into its declared output path. Runs on ANY boot that has templates declared. | Template output path unwritable (e.g. `/etc/foo` without `sudo: true` on the template) or template source render error | Add `sudo: true` to the template if the output is under a root-owned dir; otherwise fix the template source |
+| `startup` | Runs the `startup()` function's body from `devm.sh` (if defined) as a single bash process, wrapped in a `timeout` — default 600s, overridable via `DEVM_INSTALL_STEP_TIMEOUT_S`. | The function exits non-zero, or exceeds its timeout | Read the captured output above the error; fix the failing command, or raise `DEVM_INSTALL_STEP_TIMEOUT_S` |
+| `enforce` | Stage marker only — no in-guest work. Marks the point after which egress is enforced. | Should not fail | n/a |
+| `services` | Enables + starts each declared service unit and health-polls it before `devm.target` (and therefore access) is granted. | Service failed to start (port in use, missing binary, bad config) | `tart exec <vm> systemctl status <unit>` and `tart exec <vm> journalctl -u <unit>` |
+
+A failure at any stage from `bundle` through `enforce` leaves the VM in a bad cold-start state — `devm start` tears it down (the next `devm start` starts clean). Only `services` keeps the VM for in-place debugging via `tart exec` — it's the sole stage that runs after enforcement, so a failure there is a user-declared service being broken *after* everything else worked. `templates` deliberately does not keep the VM even though it runs after `install()`/`docker:`: it runs under open egress, before `enforce` installs the real allowlist, so a VM kept alive on a `templates` failure would be sitting there unenforced.
+
+---
+
+## Workload failures
+
+These occur after a successful provision: the VM is up and provisioned, but code running inside it cannot reach something.
+
+### Connection refused or no such host
+
+```
+curl: (7) Failed to connect to api.example.com port 443: Connection refused
+curl: (6) Could not resolve host: api.example.com
+```
+
+Under the enforced egress policy, only HTTPS (:443), HTTP (:80), and NTP (:123) leave the VM. HTTP/HTTPS goes through iron-proxy on the Mac, which applies `network.allow`. Two things can produce a connection-refused symptom:
+
+1. **iron-proxy blocked it.** The destination is not listed under `network.allow` in `devm.yaml`, so iron-proxy dropped the request. Fix: add the host to `network.allow` (or change to `- "*"` if you actually want no allowlist).
+2. **The workload tried a non-HTTP port.** Outbound to a port other than 80 or 443 (e.g. 5432, 3306, 6379 for talking to external Postgres/MySQL/Redis) is dropped before iron-proxy sees it — there's nothing to add to `network.allow` that would help. Fix: front the external service with an HTTPS endpoint, or (for peer VMs on the same Mac) use `direct: true` on the target service and address it by hostname.
+
+Check:
+
+1. `devm.yaml` — confirm the host appears under `network.allow`.
+2. Iron-proxy log at `~/Library/Logs/devm/<project-id>-proxy.log` — logs every :80/:443 request decision. Replace `<project-id>` with the value of `project.name` in your `devm.yaml`. If the failing flow isn't logged there at all, it was dropped before iron-proxy saw it (case 2 above).
+
+See `devm skills get routing` for `network.allow` syntax and how routing works.
+
+### HTTPS certificate errors
+
+```
+curl: (60) SSL certificate problem: unable to get local issuer certificate
+```
+
+Iron-proxy terminates TLS on the Mac and re-signs responses with the devm CA. If the VM does not trust the devm CA, every HTTPS request through the proxy fails with a cert error.
+
+Check the `install devm bundle` step output from the most recent cold start. CA cert installation happens during that step; any CA merge failure surfaces as a `FAIL: devm CA installed to CApath but not merged into ca-certificates.crt bundle` line. If it failed, recreate the VM (delete and re-run `devm start`) so the provisioner runs again.
+
+If the CA cert itself is missing from the Mac (`~/Library/Application Support/devm/ca/root.crt`), or is not trusted in the System Keychain, run `devm install` to regenerate and re-trust it.
+
+### Token and secret issues
+
+If an API call fails with unexpected credentials or a 401, check whether iron-proxy's token substitution is working correctly. See `devm skills get secrets` for the full secret flow and how to diagnose substitution failures.
+
+---
+
+## Approve gate refusals
+
+`devm start` and `devm reconcile` refuse when the project's `devm.yaml` (or `devm.me.yaml`, `devm.sh`, `devm.me.sh`, if present) diverges from the last-approved snapshot:
+
+```
+error: approve required
+devm.yaml (or devm.me.yaml, devm.sh, devm.me.sh) has changed since it was last approved.
+Approve the change:
+  - Click the devm menu bar icon → Review, or
+  - Run `devm approve` in this terminal to review + approve inline.
+```
+
+The human must physically approve the change through one of these two paths — there is no `--yes` flag, and scripts cannot approve. `devm approve` is interactive-only; it prints the diff and prompts `y/N` at the terminal.
+
+First-run bootstrap: a project with no prior approval snapshot takes its current `devm.yaml` as the baseline on the first `devm start`. No prompt fires; the check only activates when there is history to compare against.
+
+---
+
+## Where logs live
+
+| Log | Path | Notes |
+|---|---|---|
+| Daemon stdout | `~/Library/Logs/com.devm.service.out.log` | Primary daemon output |
+| Daemon stderr | `~/Library/Logs/com.devm.service.err.log` | Start here for daemon crashes and startup failures |
+| Iron-proxy | `~/Library/Logs/devm/<project-id>-proxy.log` | Per-project; logs every proxied request. `<project-id>` = `project.name` in `devm.yaml` |
+| In-VM systemd | `tart exec <vm> journalctl -u <unit>` | Use `-xe` for recent system errors; use `-u <unit>` for a specific service |
+| Install / uninstall | `~/Library/Logs/devm/install.log` | Subprocess output from `devm install` and `devm uninstall`; last 30 lines are printed automatically on failure |

@@ -1,0 +1,77 @@
+"""92: devm bundle — /opt/devm layout, no .devm/ in workspace.
+
+Consolidated smoke test for the bundle refactor:
+  - After `devm start`, /opt/devm/ has scripts/ (with-devm-env,
+    install-templates.sh) and install.sh with expected modes.
+  - /usr/local/bin/with-devm-env is a symlink into /opt/devm/scripts/.
+  - The workspace has a `.vm` symlink into the primary volume's Mac-side
+    storage (not a `.devm/` directory materialized in-place).
+  - `devm exec` works and cfg-declared env vars are visible via the
+    wrapper (which sources /etc/environment).
+"""
+from __future__ import annotations
+
+import subprocess
+
+import pytest
+
+pytestmark = pytest.mark.devm
+
+
+@pytest.mark.timeout(600)
+def test_devm_bundle_layout(workspace, devm):
+    workspace.write_devmyaml(
+        env={"BUNDLE_TEST": "hello"},
+    )
+
+    start = subprocess.run(
+        [devm.path, "start"],
+        cwd=str(workspace.path),
+        capture_output=True,
+        timeout=300,
+    )
+    assert start.returncode == 0, (
+        f"devm start failed:\nstderr={start.stderr.decode()!r}"
+    )
+
+    # ---- /opt/devm/ layout ----
+    ls = subprocess.run(
+        [devm.path, "exec", "sh", "-c",
+         "ls -la /opt/devm/ /opt/devm/scripts/ 2>&1"],
+        cwd=str(workspace.path), capture_output=True, timeout=30,
+    )
+    out = ls.stdout.decode()
+    assert "with-devm-env" in out, out
+    assert "install-templates.sh" in out, out
+    assert "install.sh" in out, out
+
+    # ---- /usr/local/bin/with-devm-env is symlink into /opt/devm/ ----
+    readlink = subprocess.run(
+        [devm.path, "exec", "readlink", "/usr/local/bin/with-devm-env"],
+        cwd=str(workspace.path), capture_output=True, timeout=30,
+    )
+    assert readlink.returncode == 0
+    assert readlink.stdout.decode().strip() == "/opt/devm/scripts/with-devm-env"
+
+    # ---- Workspace has a .vm symlink into the primary volume, not .devm/ ----
+    vm_link = workspace.path / ".vm"
+    assert vm_link.is_symlink(), ".vm symlink must be present in the workspace"
+    assert vm_link.readlink() == workspace.volume_path(), (
+        f".vm symlink target mismatch: got {vm_link.readlink()}, "
+        f"expected {workspace.volume_path()}"
+    )
+    assert not (workspace.path / ".devm").exists(), (
+        f".devm/ should not be created in the workspace; found: "
+        f"{list((workspace.path / '.devm').iterdir()) if (workspace.path / '.devm').exists() else 'N/A'}"
+    )
+
+    # ---- env from cfg is visible via the wrapper ----
+    echo = subprocess.run(
+        [devm.path, "exec", "sh", "-c", 'echo "$BUNDLE_TEST"'],
+        cwd=str(workspace.path), capture_output=True, timeout=30,
+    )
+    assert echo.returncode == 0
+    assert echo.stdout.decode().strip() == "hello", (
+        f"env var BUNDLE_TEST not exported via /etc/environment; "
+        f"got: {echo.stdout.decode()!r}"
+    )

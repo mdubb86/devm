@@ -1,0 +1,139 @@
+"""Tart-backed sandbox fixture and helpers.
+
+Replaces the deleted helpers/sbx.py from the sbx era. Provides:
+  - TartSandbox: thin wrapper with exec/ip/state primitives
+  - Used by the tart_sandbox fixture in conftest.py
+"""
+from __future__ import annotations
+
+import json
+import subprocess
+import time
+from dataclasses import dataclass
+
+
+@dataclass
+class TartSandbox:
+    """Handle for a Tart VM brought up by `devm shell`."""
+    name: str
+
+    def exec(self, *argv: str, timeout: float = 60.0) -> "ExecResult":
+        """Run a command inside the VM via `tart exec`.
+
+        Retries ONCE on tart-guest-agent's specific gRPC transport
+        flakes ("Transport became inactive" / "SendHeader called
+        multiple times" — both HTTP/2 issues on the agent's RPC
+        channel). Any other non-zero exit is returned as-is; a
+        legitimate command failure must reach the caller.
+        """
+        r = subprocess.run(
+            ["tart", "exec", self.name, *argv],
+            capture_output=True, timeout=timeout,
+        )
+        result = ExecResult(
+            stdout=r.stdout.decode(errors="replace"),
+            stderr=r.stderr.decode(errors="replace"),
+            exit_code=r.returncode,
+        )
+        if _is_transport_flake(result):
+            time.sleep(2)
+            r = subprocess.run(
+                ["tart", "exec", self.name, *argv],
+                capture_output=True, timeout=timeout,
+            )
+            result = ExecResult(
+                stdout=r.stdout.decode(errors="replace"),
+                stderr=r.stderr.decode(errors="replace"),
+                exit_code=r.returncode,
+            )
+        return result
+
+    def exec_shell(self, script: str, timeout: float = 60.0) -> "ExecResult":
+        """Run a shell script inside the VM via `tart exec bash -c '...'`."""
+        return self.exec("bash", "-c", script, timeout=timeout)
+
+    def ip(self) -> str:
+        """Return the VM's current vmnet IP. Empty string on error."""
+        r = subprocess.run(
+            ["tart", "ip", self.name],
+            capture_output=True, timeout=10,
+        )
+        if r.returncode != 0:
+            return ""
+        return r.stdout.decode().strip()
+
+    def state(self) -> str:
+        """Return 'absent' / 'stopped' / 'running'."""
+        r = subprocess.run(
+            ["tart", "list", "--format=json"],
+            capture_output=True, timeout=10,
+        )
+        if r.returncode != 0:
+            return "absent"
+        try:
+            entries = json.loads(r.stdout.decode())
+        except Exception:
+            return "absent"
+        for e in entries:
+            name = e.get("Name") or e.get("name") or ""
+            if name == self.name:
+                state = (e.get("State") or e.get("state") or "").lower()
+                return "running" if state == "running" else "stopped"
+        return "absent"
+
+    def wait_running(self, timeout: float = 60.0) -> bool:
+        """Poll until state == 'running' or timeout."""
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            if self.state() == "running":
+                return True
+            time.sleep(1.0)
+        return False
+
+    def wait_state(self, expected: str, timeout: float = 30.0) -> str:
+        """Poll `state()` until it matches `expected` or timeout expires.
+        Returns the final observed state (whether or not it matched).
+
+        Use in place of two-step "wait then assert" patterns that call
+        `state()` twice (once for the check, once for the error message)
+        — those double-calls race the VM transitioning between the two
+        polls and can produce "expected 'X' == 'X'" style failures where
+        the state changed between the assertion and the error format.
+        """
+        deadline = time.monotonic() + timeout
+        current = self.state()
+        while time.monotonic() < deadline:
+            current = self.state()
+            if current == expected:
+                return current
+            time.sleep(0.5)
+        return current
+
+
+@dataclass
+class ExecResult:
+    stdout: str
+    stderr: str
+    exit_code: int
+
+    @property
+    def ok(self) -> bool:
+        return self.exit_code == 0
+
+
+_TRANSPORT_FLAKE_MARKERS = (
+    "Transport became inactive",
+    "unavailable (14)",
+    "SendHeader called multiple times",
+    "internal error (13)",
+)
+
+
+def _is_transport_flake(r: "ExecResult") -> bool:
+    """Detect tart-guest-agent's gRPC transport flakes — HTTP/2
+    connection drops or header-send races on the guest-side RPC
+    channel. Mirrors `tart.IsTransportInactive` in the Go layer.
+    """
+    if r.exit_code == 0:
+        return False
+    return any(m in r.stderr for m in _TRANSPORT_FLAKE_MARKERS)

@@ -1,0 +1,107 @@
+package schema
+
+import "gopkg.in/yaml.v3"
+
+type ProjectOverride struct {
+	Name *string `yaml:"name,omitempty"`
+}
+
+type NetworkOverride struct {
+	Allow *[]AllowEntry `yaml:"allow,omitempty"`
+}
+
+type ServiceOverride struct {
+	// Port + BindIP are populated polymorphically by UnmarshalYAML:
+	//   - `port: 80` → Port=&80, BindIP=nil
+	//   - `port: "0.0.0.0:80"` → Port=&80, BindIP=&"0.0.0.0"
+	// PortIsSet distinguishes "field absent in override" from "set to 0".
+	Port      *int    `yaml:"-"`
+	BindIP    *string `yaml:"-"`
+	PortIsSet bool    `yaml:"-"`
+
+	Hostname   *string             `yaml:"hostname,omitempty"`
+	Direct     *bool               `yaml:"direct,omitempty"`
+	ExposeHost *bool               `yaml:"expose_host,omitempty"`
+	Env        map[string]EnvValue `yaml:"env,omitempty"`
+	Templates  *[]Template         `yaml:"templates,omitempty"`
+	// ExecFunc/ExecArgv mirror Service's split: an override `exec:`
+	// scalar sets ExecFunc (function-name form), a sequence sets
+	// ExecArgv (literal argv form). At most one is non-nil.
+	ExecFunc *string   `yaml:"-"`
+	ExecArgv *[]string `yaml:"-"`
+	WorkDir  *string   `yaml:"workdir,omitempty"`
+	Restart  *string   `yaml:"restart,omitempty"`
+	After    *[]string `yaml:"after,omitempty"`
+	User     *string   `yaml:"user,omitempty"`
+	Systemd  *string   `yaml:"systemd,omitempty"`
+}
+
+type serviceOverrideYAML struct {
+	Port       yaml.Node           `yaml:"port,omitempty"`
+	Hostname   *string             `yaml:"hostname,omitempty"`
+	Direct     *bool               `yaml:"direct,omitempty"`
+	ExposeHost *bool               `yaml:"expose_host,omitempty"`
+	Env        map[string]EnvValue `yaml:"env,omitempty"`
+	Templates  *[]Template         `yaml:"templates,omitempty"`
+	Exec       yaml.Node           `yaml:"exec,omitempty"`
+	WorkDir    *string             `yaml:"workdir,omitempty"`
+	Restart    *string             `yaml:"restart,omitempty"`
+	After      *[]string           `yaml:"after,omitempty"`
+	User       *string             `yaml:"user,omitempty"`
+	Systemd    *string             `yaml:"systemd,omitempty"`
+}
+
+func (o *ServiceOverride) UnmarshalYAML(node *yaml.Node) error {
+	var raw serviceOverrideYAML
+	if err := node.Decode(&raw); err != nil {
+		return err
+	}
+	o.Hostname = raw.Hostname
+	o.Direct = raw.Direct
+	o.ExposeHost = raw.ExposeHost
+	o.Env = raw.Env
+	o.Templates = raw.Templates
+	o.WorkDir = raw.WorkDir
+	o.Restart = raw.Restart
+	o.After = raw.After
+	o.User = raw.User
+	o.Systemd = raw.Systemd
+	if raw.Exec.Kind != 0 {
+		var tmp Service
+		if err := tmp.decodeExecNode(raw.Exec); err != nil {
+			return err
+		}
+		if tmp.ExecFunc != "" {
+			o.ExecFunc = &tmp.ExecFunc
+		}
+		if len(tmp.ExecArgv) > 0 {
+			o.ExecArgv = &tmp.ExecArgv
+		}
+	}
+	if raw.Port.Kind == 0 {
+		return nil
+	}
+	o.PortIsSet = true
+	var tmp Service
+	if err := tmp.decodePortNode(raw.Port); err != nil {
+		return err
+	}
+	o.Port = &tmp.Port
+	if tmp.BindIP != "" {
+		o.BindIP = &tmp.BindIP
+	}
+	return nil
+}
+
+type ConfigOverride struct {
+	Project  *ProjectOverride           `yaml:"project,omitempty"`
+	Network  *NetworkOverride           `yaml:"network,omitempty"`
+	Docker   *DockerConfig              `yaml:"docker,omitempty"`
+	Env      map[string]EnvValue        `yaml:"env,omitempty"`
+	Services map[string]ServiceOverride `yaml:"services,omitempty"`
+	Path     *[]string                  `yaml:"path,omitempty"`
+	Packages *[]string                  `yaml:"packages,omitempty"`
+	Disk     *string                    `yaml:"disk,omitempty"`
+	Swap     *string                    `yaml:"swap,omitempty"`
+	Cron     map[string]string          `yaml:"cron,omitempty"`
+}

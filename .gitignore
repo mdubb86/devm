@@ -1,0 +1,69 @@
+# Build outputs
+/devm
+/dist/
+/share/
+
+# Go test cache
+*.test
+*.out
+
+# IDE
+.idea/
+.vscode/
+
+# OS
+.DS_Store
+
+# Superpowers execution scratch (ledgers, briefs, review packages)
+.superpowers/
+
+# Local scratch (notes, recipes, work-in-progress) — never committed
+.tmp/
+bin/
+
+# Local Claude Code scratch — settings, worktrees, session artifacts.
+# Personal, per-machine, never committed.
+.claude/
+
+# devm-runc-shim and devm-docker-shim compiled artifacts (sources
+# are cmd/devm-runc-shim/ + cmd/devm-docker-shim/, compiled at build
+# time and embedded via internal/docker/embed.go).
+internal/docker/embed/devm-runc-shim
+internal/docker/embed/devm-docker-shim
+
+# iron-proxy binary embedded (gzipped) into devm at build time.
+# Populated by `just fetch-iron-proxy` and by the goreleaser before-hook.
+internal/ironproxy/embed/iron-proxy.gz
+
+# devm-helper binary embedded (gzipped) into devm at build time.
+# Populated by `just _build-helper-embed`.
+internal/helper/embed/devm-helper.gz
+
+# devm-setsid-shim binary embedded (gzipped) into devm at build time.
+# Populated by `just _build-setsid-shim-embed`.
+internal/setsidshim/embed/devm-setsid-shim.gz
+
+# gdevm binary embedded (uncompressed) into devm at build time.
+# Populated by `just _build-gdevm-embed`. Single guest-side
+# dispatcher; subcommands pop / propose / run.
+internal/guestbin/embed/gdevm
+
+# mutagen binary embedded (gzipped) into devm at build time.
+# Populated by `just fetch-mutagen`.
+internal/mutagen/embed/*.gz
+
+# tart-mutagen-ssh binary embedded (uncompressed) into devm at build time.
+# Populated by `just _build-tart-mutagen-ssh-embed`.
+internal/tartmutagenssh/embed/tart-mutagen-ssh
+
+# xcodebuild derived data for the Mac menu-bar app.
+# Populated by `just mac-build` / `just mac-build-e2e`.
+mac/devm/build/
+
+# Svelte webview bundle embedded into the Mac app's Resources/.
+# Populated by `just mac-webview-build` (a `mac-build` / `mac-build-e2e`
+# dependency) from mac/webview/.
+mac/devm/Resources/gui.html
+mac/devm/Resources/gui.js
+mac/devm/Resources/gui.js.map
+mac/devm/Resources/gui.css

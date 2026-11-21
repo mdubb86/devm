@@ -1,0 +1,184 @@
+version: 2
+
+project_name: devm
+
+# Fetch the pinned iron-proxy binary and gzip it into the embed dir
+# so //go:embed in internal/ironproxy/embed.go picks it up at compile
+# time. IRON_PROXY_VERSION can be overridden via the CI environment;
+# default matches the version pinned in justfile. Ships iron-proxy
+# INSIDE the devm binary rather than alongside it — `devm upgrade`
+# then always gets a devm+iron-proxy pair atomically, no chance of
+# stale/absent iron-proxy on a self-updated install.
+before:
+  hooks:
+    - go mod tidy
+    - sh -c 'IRON_PROXY_VERSION="${IRON_PROXY_VERSION:-v0.45.0}" && ver="$(echo "$IRON_PROXY_VERSION" | sed "s/^v//")" && mkdir -p internal/ironproxy/embed && curl -fsSL -o /tmp/iron-proxy.tar.gz "https://github.com/paradigmxyz/iron-proxy/releases/download/${IRON_PROXY_VERSION}/iron-proxy_${ver}_darwin_arm64.tar.gz" && tar -xzf /tmp/iron-proxy.tar.gz -C /tmp iron-proxy && gzip -c /tmp/iron-proxy > internal/ironproxy/embed/iron-proxy.gz && rm /tmp/iron-proxy.tar.gz /tmp/iron-proxy'
+    # Fetch the pinned mutagen binary + its agents tarball into the
+    # embed dir. Both //go:embed pragmas in internal/mutagen/embed.go
+    # need them on disk at compile time. MUTAGEN_VERSION mirrors the
+    # justfile fetch-mutagen recipe (v0.18.1). Ships mutagen (and its
+    # per-guest-platform agents) INSIDE the devm binary same as iron-
+    # proxy above — no risk of a self-update leaving a devm+mutagen
+    # version skew on the user's disk.
+    - sh -c 'MUTAGEN_VERSION="${MUTAGEN_VERSION:-v0.18.1}" && tmp="$(mktemp -d)" && mkdir -p internal/mutagen/embed && curl -fsSL -o "$tmp/mutagen.tar.gz" "https://github.com/mutagen-io/mutagen/releases/download/${MUTAGEN_VERSION}/mutagen_darwin_arm64_${MUTAGEN_VERSION}.tar.gz" && tar -xzf "$tmp/mutagen.tar.gz" -C "$tmp" mutagen mutagen-agents.tar.gz && gzip -c "$tmp/mutagen" > internal/mutagen/embed/mutagen.gz && cp "$tmp/mutagen-agents.tar.gz" internal/mutagen/embed/mutagen-agents.tar.gz && rm -rf "$tmp"'
+    - sh -c 'mkdir -p internal/docker/embed && GOOS=linux GOARCH=arm64 go build -o internal/docker/embed/devm-runc-shim ./cmd/devm-runc-shim'
+    - sh -c 'mkdir -p internal/docker/embed && GOOS=linux GOARCH=arm64 go build -o internal/docker/embed/devm-docker-shim ./cmd/devm-docker-shim'
+    # Compile devm-helper for darwin_arm64 and gzip into the embed dir.
+    # Mirrors the just _build-helper-embed recipe (including the
+    # identity.Profile ldflag — goreleaser only ever builds "prod", so
+    # it's hardcoded here). Runs before the main devm build so
+    # //go:embed picks up the freshly-produced blob. mktemp avoids a
+    # race with any concurrent build sharing /tmp.
+    - sh -c 'mkdir -p internal/helper/embed && raw="$(mktemp -t devm-helper-raw.XXXXXX)" && GOOS=darwin GOARCH=arm64 go build -ldflags "-X github.com/mdubb86/devm/internal/identity.Profile=prod" -o "$raw" ./cmd/devm-helper && gzip -c "$raw" > internal/helper/embed/devm-helper.gz && rm "$raw"'
+    # Compile devm-setsid-shim for darwin_arm64 and gzip into the embed
+    # dir. Mirrors the just _build-setsid-shim-embed recipe. No
+    # identity.Profile ldflag — the shim is identity-agnostic, the same
+    # binary works for prod + e2e.
+    - sh -c 'mkdir -p internal/setsidshim/embed && raw="$(mktemp -t devm-setsid-shim-raw.XXXXXX)" && GOOS=darwin GOARCH=arm64 go build -o "$raw" ./cmd/devm-setsid-shim && gzip -c "$raw" > internal/setsidshim/embed/devm-setsid-shim.gz && rm "$raw"'
+    # Compile the guest-side gdevm dispatcher for linux_arm64. Mirrors
+    # the just _build-gdevm-embed recipe. Single binary, pop/propose/run
+    # subcommands. Uncompressed embed, static (no cgo).
+    - sh -c 'mkdir -p internal/guestbin/embed && GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -o internal/guestbin/embed/gdevm ./cmd/gdevm'
+    # Compile the Mac-side tart-mutagen-ssh shim for darwin_arm64. Mirrors
+    # the just _build-tart-mutagen-ssh-embed recipe. Static (no cgo).
+    - sh -c 'mkdir -p internal/tartmutagenssh/embed && GOOS=darwin GOARCH=arm64 CGO_ENABLED=0 go build -o internal/tartmutagenssh/embed/tart-mutagen-ssh ./cmd/tart-mutagen-ssh'
+    # Build the signed menu-bar app bundle at bin/devm.app so the
+    # archives step below can package it alongside the daemon binary.
+    - just mac-build
+    # Rename the app's inner executable + CFBundleExecutable so
+    # go-selfupdate's basename-only match in decompress.go's
+    # unarchiveTar doesn't grab the Swift Mac app binary as if it
+    # were the CLI on `devm upgrade`. macOS launches the .app via
+    # CFBundleExecutable, so the bundle still runs; the tarball's
+    # only basename `devm` is the top-level Go CLI.
+    # Re-sign after the rename because the mv invalidates the
+    # xcodebuild-time signature.
+    - sh -c 'mv bin/devm.app/Contents/MacOS/devm bin/devm.app/Contents/MacOS/devm-menubar && plutil -replace CFBundleExecutable -string devm-menubar bin/devm.app/Contents/Info.plist && codesign --force --sign devm-dev --options=runtime bin/devm.app'
+
+builds:
+  # Tart requires Apple Silicon; amd64 macOS isn't a supported target.
+  # CGO is required: internal/secret bridges to the macOS Security
+  # framework for keychain access, and internal/serviceapi/sockact
+  # has darwin+cgo files for launchd socket activation. macos-latest
+  # CI runners are darwin/arm64 → native cgo, no cross-compile pain.
+  - id: devm
+    main: ./cmd/devm
+    binary: devm
+    env:
+      - CGO_ENABLED=1
+    goos:
+      - darwin
+    goarch:
+      - arm64
+    ldflags:
+      - -s -w
+      - -X main.Version={{.Version}}
+      - -X main.Commit={{.ShortCommit}}
+      - -X main.Date={{.Date}}
+      # Random per-build stamp. Both CLI and daemon are compiled from
+      # this build so they share the value; drift detection in
+      # cmd/devm/main.go's ensureDaemonInSync compares them at
+      # command time to catch "binary on disk was rebuilt but the
+      # daemon wasn't restarted." Must be injected on every build
+      # path (see justfile + e2e/scripts/run.sh for the others).
+      - -X main.Fingerprint={{.Env.FINGERPRINT}}
+    hooks:
+      # Re-sign ad-hoc WITH a stable --identifier so macOS TCC treats
+      # every rebuild as the SAME app. The Go linker's default
+      # ad-hoc signature carries `Identifier=a.out`, and macOS keys
+      # TCC entries (Full Disk Access, etc.) on (identifier, cdhash) —
+      # so every `devm upgrade` was previously creating a fresh
+      # entry. With a stable identifier, all builds collapse to one
+      # entry. `--sign -` = ad-hoc; no Developer ID cert required in
+      # the CI runner. Same identifier is applied to dev builds in
+      # justfile._build.
+      post:
+        - codesign --sign - --force --options=runtime --identifier com.mdubb86.devm '{{ .Path }}'
+
+archives:
+  - id: default
+    formats: [tar.gz]
+    name_template: >-
+      {{ .ProjectName }}_v{{ .Version }}_
+      {{- .Os }}_
+      {{- .Arch }}
+    files:
+      - image/*
+      - LICENSE
+      - README.md
+      - THIRD_PARTY_NOTICES.md
+      # devm.app is a directory bundle (Contents/{MacOS,Resources,...});
+      # goreleaser walks src recursively when it names a directory, so
+      # this pulls the whole bundle into the tarball under devm.app/.
+      - src: bin/devm.app
+        dst: devm.app
+
+checksum:
+  name_template: "checksums.txt"
+
+# Public history has one commit per release, so a generated changelog
+# would be empty. The release notes are the body of the release tag's
+# message (falling back to the commit message, which carries the same text).
+changelog:
+  disable: true
+
+release:
+  header: "{{ .TagBody }}"
+  github:
+    owner: mdubb86
+    name: devm
+  draft: false
+  prerelease: auto
+
+homebrew_casks:
+  - name: devm
+    description: "Mac dev sandbox tool (wraps Tart VMs + iron-proxy egress enforcement)"
+    homepage: "https://github.com/mdubb86/devm"
+    repository:
+      owner: mdubb86
+      name: homebrew-tap
+      token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
+    commit_author:
+      name: goreleaserbot
+      email: bot@goreleaser.com
+    binaries:
+      - devm
+    # The binary is ad-hoc signed (no Apple Developer ID). Gatekeeper
+    # still flags com.apple.quarantine on cask artifacts; strip the
+    # xattr in a postflight hook so first-run doesn't pop the "cannot
+    # verify developer" dialog. Standard pattern for OSS CLIs without
+    # paid notarization.
+    #
+    # `app "devm.app"` is the native Homebrew Cask DSL stanza (works
+    # against any archive format the cask downloads, not just DMGs —
+    # goreleaser's own `app:` cask field is Pro-only and DMG-specific,
+    # so it's declared here via custom_block instead). It moves the
+    # menu-bar app bundle from the extracted tar.gz into /Applications
+    # so `devm install`'s Homebrew fallback path (installMenuApp in
+    # cmd/devm/menuapp_install.go) finds it already there and only
+    # needs to register the LaunchAgent.
+    custom_block: |
+      app "devm.app"
+
+      postflight do
+        system_command "/usr/bin/xattr",
+                       args: ["-rd", "com.apple.quarantine", staged_path]
+      end
+
+      caveats <<~EOS
+        devm installs a system LaunchDaemon (com.devm.service) that owns
+        privileged guest-VM setup. brew upgrade swaps the CLI binary, but
+        the running daemon keeps its loaded code until it is reinstalled
+        — which requires sudo/TouchID that a non-interactive brew run
+        has no way to prompt for.
+
+        To finish the upgrade, run:
+
+          devm install
+
+        Every daemon-touching command (shell, start, exec, stop, propose,
+        reconcile, teardown, route) also checks for CLI/daemon drift on
+        entry and refuses with the same instruction if the install has
+        not been run yet, so there is no path where you silently talk to
+        a stale daemon.
+      EOS

@@ -1,0 +1,313 @@
+// Package recipes is the runtime layer for `devm recipes`: opens
+// the synced SQLite database, exposes List/Search/Get, and (in
+// sync.go) manages the lazy daily cache refresh.
+package recipes
+
+import (
+	"context"
+	"database/sql"
+	"errors"
+	"fmt"
+	"strconv"
+
+	_ "modernc.org/sqlite"
+)
+
+// Recipe is one row from the recipes table, with the body content
+// loaded for Get(). List() returns shallow copies with empty Content.
+type Recipe struct {
+	Name        string
+	Category    string
+	DisplayName string
+	Description string
+	Keywords    string
+	Content     string
+	Since       string
+}
+
+// Query wraps an open SQLite handle. Construct via Open(path); close
+// with Close().
+type Query struct {
+	db *sql.DB
+}
+
+// Open opens the recipes DB. Returns an error if the file doesn't exist
+// or fails a basic sanity check.
+func Open(path string) (*Query, error) {
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		return nil, fmt.Errorf("recipes: open %s: %w", path, err)
+	}
+	// Cheap sanity check: meta table exists.
+	if _, err := db.QueryContext(context.Background(),
+		"SELECT 1 FROM meta LIMIT 1"); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("recipes: db at %s is missing meta: %w", path, err)
+	}
+	return &Query{db: db}, nil
+}
+
+func (q *Query) Close() error { return q.db.Close() }
+
+// List returns recipes filtered by category (empty string = all),
+// ordered by name. Content is NOT populated (callers should Get()
+// when they need the body).
+func (q *Query) List(category string) ([]Recipe, error) {
+	ctx := context.Background()
+	var (
+		rows *sql.Rows
+		err  error
+	)
+	if category == "" {
+		rows, err = q.db.QueryContext(ctx,
+			`SELECT name, category, display_name, description, keywords, since
+			 FROM recipes ORDER BY name`)
+	} else {
+		rows, err = q.db.QueryContext(ctx,
+			`SELECT name, category, display_name, description, keywords, since
+			 FROM recipes WHERE category = ? ORDER BY name`, category)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("recipes: list: %w", err)
+	}
+	defer rows.Close()
+
+	var out []Recipe
+	for rows.Next() {
+		var r Recipe
+		var since sql.NullString
+		if err := rows.Scan(&r.Name, &r.Category, &r.DisplayName,
+			&r.Description, &r.Keywords, &since); err != nil {
+			return nil, err
+		}
+		r.Since = since.String
+		out = append(out, r)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// Search runs an FTS5 query over name + description + keywords + content.
+// Returns up to limit results in FTS5's default rank order.
+func (q *Query) Search(term string, limit int) ([]Recipe, error) {
+	if limit <= 0 {
+		limit = 20
+	}
+	rows, err := q.db.QueryContext(context.Background(),
+		`SELECT r.name, r.category, r.display_name, r.description, r.keywords, r.since
+		 FROM recipes_fts f
+		 JOIN recipes r ON r.name = f.name
+		 WHERE recipes_fts MATCH ?
+		 ORDER BY rank
+		 LIMIT ?`,
+		term, limit)
+	if err != nil {
+		return nil, fmt.Errorf("recipes: search %q: %w", term, err)
+	}
+	defer rows.Close()
+
+	var out []Recipe
+	for rows.Next() {
+		var r Recipe
+		var since sql.NullString
+		if err := rows.Scan(&r.Name, &r.Category, &r.DisplayName,
+			&r.Description, &r.Keywords, &since); err != nil {
+			return nil, err
+		}
+		r.Since = since.String
+		out = append(out, r)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// Get fetches a single recipe (with content). Returns error if not found.
+func (q *Query) Get(name string) (Recipe, error) {
+	var r Recipe
+	var since sql.NullString
+	err := q.db.QueryRowContext(context.Background(),
+		`SELECT name, category, display_name, description, keywords, content, since
+		 FROM recipes WHERE name = ?`, name).
+		Scan(&r.Name, &r.Category, &r.DisplayName, &r.Description, &r.Keywords, &r.Content, &since)
+	if errors.Is(err, sql.ErrNoRows) {
+		return Recipe{}, fmt.Errorf("%w: %s", ErrRecipeNotFound, name)
+	}
+	if err != nil {
+		return Recipe{}, err
+	}
+	r.Since = since.String
+	return r, nil
+}
+
+// AssetListing is one row from the assets table with content omitted;
+// callers fetch bodies individually via GetAsset.
+type AssetListing struct {
+	Path string
+	Size int64
+	Mode uint32
+}
+
+// ListAssets returns all assets for recipeName, sorted by Path ascending.
+// Returns an empty slice with no error if the recipe exists but has no
+// assets. Returns ErrRecipeNotFound if no recipe row with that name
+// exists.
+func (q *Query) ListAssets(ctx context.Context, recipeName string) ([]AssetListing, error) {
+	if err := q.assertRecipeExists(ctx, recipeName); err != nil {
+		return nil, err
+	}
+	rows, err := q.db.QueryContext(ctx,
+		`SELECT path, size, mode FROM assets WHERE recipe_name = ? ORDER BY path ASC`,
+		recipeName,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("query assets for %q: %w", recipeName, err)
+	}
+	defer rows.Close()
+	out := []AssetListing{}
+	for rows.Next() {
+		var a AssetListing
+		if err := rows.Scan(&a.Path, &a.Size, &a.Mode); err != nil {
+			return nil, fmt.Errorf("scan asset row: %w", err)
+		}
+		out = append(out, a)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// GetAsset returns the raw content bytes for one asset. Validates path
+// before touching the DB.
+func (q *Query) GetAsset(ctx context.Context, recipeName, path string) ([]byte, error) {
+	if err := ValidAssetPath(path); err != nil {
+		return nil, err
+	}
+	if err := q.assertRecipeExists(ctx, recipeName); err != nil {
+		return nil, err
+	}
+	var body []byte
+	err := q.db.QueryRowContext(ctx,
+		`SELECT content FROM assets WHERE recipe_name = ? AND path = ?`,
+		recipeName, path,
+	).Scan(&body)
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		return nil, fmt.Errorf("%w: %s in %s", ErrAssetNotFound, path, recipeName)
+	case err != nil:
+		return nil, fmt.Errorf("query asset %s/%s: %w", recipeName, path, err)
+	}
+	return body, nil
+}
+
+func (q *Query) assertRecipeExists(ctx context.Context, name string) error {
+	var one int
+	err := q.db.QueryRowContext(ctx,
+		`SELECT 1 FROM recipes WHERE name = ? LIMIT 1`, name).Scan(&one)
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		return fmt.Errorf("%w: %s", ErrRecipeNotFound, name)
+	case err != nil:
+		return fmt.Errorf("check recipe %s: %w", name, err)
+	}
+	return nil
+}
+
+// Version returns the meta.version string. This is the RELEASE
+// identity (e.g. 'recipes-vX.Y.Z' locally, 'recipes-<git-sha>' in
+// production release artifacts). It does NOT encode the schema shape
+// — for that, see SchemaVersion.
+func (q *Query) Version() (string, error) {
+	var v string
+	err := q.db.QueryRowContext(context.Background(),
+		`SELECT value FROM meta WHERE key = 'version'`).Scan(&v)
+	if err != nil {
+		return "", err
+	}
+	return v, nil
+}
+
+// CurrentSchemaVersion is the schema-shape stamp InitSchema writes into
+// meta.schema_version. Bump this any time the schema (tables, columns,
+// indexes, meta keys with load-bearing semantics) changes in a way
+// consumers might care about, so callers can detect stale caches
+// deterministically instead of parsing a release-identity string.
+//
+//   1 — original recipes/meta/idx tables (recipes-v1 releases)
+//   2 — added assets table (recipes-v2, this batch)
+const CurrentSchemaVersion = 2
+
+// SchemaVersion returns the meta.schema_version integer written by
+// InitSchema. Missing key (pre-schema_version DBs) returns 0 without
+// error — callers can treat that as "older than schema 1".
+func (q *Query) SchemaVersion() (int, error) {
+	var s string
+	err := q.db.QueryRowContext(context.Background(),
+		`SELECT value FROM meta WHERE key = 'schema_version'`).Scan(&s)
+	if errors.Is(err, sql.ErrNoRows) {
+		return 0, nil
+	}
+	if err != nil {
+		return 0, err
+	}
+	n, err := strconv.Atoi(s)
+	if err != nil {
+		return 0, fmt.Errorf("parse meta.schema_version %q: %w", s, err)
+	}
+	return n, nil
+}
+
+// InitSchema installs the recipes.db schema on an empty database. The
+// build tool and fixture helpers share this so both produce byte-
+// identical shape; the caller-supplied meta.version stamp is separate
+// (release identity, not schema shape — see CurrentSchemaVersion).
+func InitSchema(ctx context.Context, db *sql.DB) error {
+	stmts := []string{
+		`CREATE TABLE meta (
+			key   TEXT PRIMARY KEY,
+			value TEXT NOT NULL
+		)`,
+		`CREATE TABLE recipes (
+			name         TEXT PRIMARY KEY,
+			category     TEXT NOT NULL,
+			display_name TEXT NOT NULL,
+			description  TEXT NOT NULL,
+			keywords     TEXT NOT NULL,
+			content      TEXT NOT NULL,
+			since        TEXT,
+			updated_at   INTEGER NOT NULL
+		)`,
+		`CREATE INDEX idx_recipes_category ON recipes(category)`,
+		`CREATE VIRTUAL TABLE recipes_fts USING fts5(
+			name, display_name, description, keywords, content,
+			tokenize = 'porter'
+		)`,
+		`CREATE TABLE assets (
+			recipe_name TEXT NOT NULL,
+			path        TEXT NOT NULL,
+			content     BLOB NOT NULL,
+			size        INTEGER NOT NULL,
+			mode        INTEGER NOT NULL,
+			PRIMARY KEY (recipe_name, path)
+		) WITHOUT ROWID`,
+	}
+	for _, s := range stmts {
+		if _, err := db.ExecContext(ctx, s); err != nil {
+			return fmt.Errorf("recipes: init schema: %w", err)
+		}
+	}
+	// Stamp the schema-shape version. Distinct from meta.version, which
+	// the build tool writes as the release identity — different concerns:
+	// a stale cache and a new release cut are both possible independently.
+	if _, err := db.ExecContext(ctx,
+		`INSERT INTO meta (key, value) VALUES ('schema_version', ?)`,
+		strconv.Itoa(CurrentSchemaVersion),
+	); err != nil {
+		return fmt.Errorf("recipes: stamp schema_version: %w", err)
+	}
+	return nil
+}

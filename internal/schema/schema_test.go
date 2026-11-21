@@ -1,0 +1,1603 @@
+package schema
+
+import (
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+	"gopkg.in/yaml.v3"
+)
+
+// ---------- EnvValue / SecretRef tests ----------
+
+func TestServiceValidate(t *testing.T) {
+	// Minimum valid: just canonical port
+	s := Service{Port: 3000}
+	assert.NoError(t, s.Validate())
+
+	// exec-only service: no port, just exec (argv form)
+	execOnly := Service{ExecArgv: []string{"/usr/bin/redis-server"}}
+	assert.NoError(t, execOnly.Validate())
+
+	// exec-only service: no port, just exec (function-name form)
+	execFuncOnly := Service{ExecFunc: "start-redis"}
+	assert.NoError(t, execFuncOnly.Validate())
+
+	emptyWorkspace := Service{}
+	assert.Error(t, emptyWorkspace.Validate(), "service must have canonical, exec, or systemd")
+}
+
+func TestServiceHostnameMustEndInDotTest(t *testing.T) {
+	cases := []struct {
+		name  string
+		host  string
+		fails bool
+	}{
+		{"empty is OK", "", false},
+		{"plain .test", "app.test", false},
+		{"deep subdomain", "a.b.c.app.test", false},
+		{".local rejected", "app.local", true},
+		{".dev rejected", "app.dev", true},
+		{"no TLD rejected", "app", true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			s := Service{Hostname: c.host, Port: 8080}
+			err := s.Validate()
+			if c.fails {
+				assert.Error(t, err)
+				if err != nil {
+					assert.Contains(t, err.Error(), ".test")
+				}
+			} else {
+				assert.NoError(t, err)
+			}
+		})
+	}
+}
+
+// TestServiceValidate_WildcardHostnames pins the single-label TLS-style
+// wildcard shape for `hostname:`. Exactly one leading `*.` label is
+// allowed; nothing else. The `.test` suffix requirement and the
+// host.test reservation still apply inside the wildcard rest.
+func TestServiceValidate_WildcardHostnames(t *testing.T) {
+	cases := []struct {
+		name    string
+		host    string
+		wantErr bool
+		errHint string
+	}{
+		{"one leading label ok", "*.pieces.test", false, ""},
+		{"deeper suffix ok", "*.a.b.c.test", false, ""},
+		{"bare wildcard rejected", "*.test", true, "wildcard"},
+		{"multi-label wildcard rejected", "*.*.pieces.test", true, "wildcard"},
+		{"embedded wildcard rejected", "a.*.pieces.test", true, "wildcard"},
+		{"partial-label leading wildcard rejected", "foo*.pieces.test", true, "wildcard"},
+		{"partial-label trailing wildcard rejected", "*foo.pieces.test", true, "wildcard"},
+		{"wildcard in middle rejected", "pieces.*.test", true, "wildcard"},
+		{"wildcard without dot rejected", "*pieces.test", true, "wildcard"},
+		{"wildcard under host.test still rejected", "*.host.test", true, "host.test"},
+		{"wildcard with non-test suffix rejected", "*.pieces.local", true, ".test"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			err := Service{Port: 8080, Hostname: c.host}.Validate()
+			if c.wantErr {
+				require.Error(t, err)
+				if c.errHint != "" {
+					assert.Contains(t, err.Error(), c.errHint)
+				}
+			} else {
+				assert.NoError(t, err)
+			}
+		})
+	}
+}
+
+func TestServiceDirectRequiresHostname(t *testing.T) {
+	// direct without hostname is a hard error.
+	err := Service{Port: 54322, Direct: true}.Validate()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "direct: true requires a hostname")
+
+	// direct WITH hostname is fine.
+	assert.NoError(t, Service{Port: 54322, Hostname: "db.test", Direct: true}.Validate())
+
+	// non-direct without hostname stays valid (unchanged behavior).
+	assert.NoError(t, Service{Port: 54322}.Validate())
+}
+
+func TestConfigValidate(t *testing.T) {
+	c := Config{
+		Project: Project{Name: "test"},
+		Network: Network{Allow: []AllowEntry{{Host: "github.com"}}},
+		Services: OrderedMapOf(map[string]Service{
+			"webapp": {Port: 3000, Hostname: "test.test"},
+		}),
+	}
+	assert.NoError(t, c.Validate())
+
+	// Hostname collision across services
+	dup := c
+	dup.Services = OrderedMapOf(map[string]Service{
+		"webapp": {Port: 3000, Hostname: "test.test"},
+		"api":    {Port: 8080, Hostname: "test.test"},
+	})
+	assert.Error(t, dup.Validate(), "duplicate hostname")
+
+	// Port collision across services
+	dup2 := Config{
+		Project: c.Project,
+		Network: c.Network,
+		Services: OrderedMapOf(map[string]Service{
+			"a": {Port: 3000},
+			"b": {Port: 3000},
+		}),
+	}
+	assert.Error(t, dup2.Validate(), "duplicate canonical port")
+
+	// Missing required project fields
+	bad := c
+	bad.Project.Name = ""
+	assert.Error(t, bad.Validate(), "project.name required")
+}
+
+func TestConfigValidatesPortRange(t *testing.T) {
+	base := Config{
+		Project: Project{Name: "p"},
+	}
+
+	// canonical out of range (too large) → error.
+	bigPort := base
+	bigPort.Services = OrderedMapOf(map[string]Service{"api": {Port: 70000}})
+	assert.Error(t, bigPort.Validate(), "canonical over 65535 must error")
+
+	// Valid port → no error.
+	ok := base
+	ok.Services = OrderedMapOf(map[string]Service{"api": {Port: 8080}})
+	assert.NoError(t, ok.Validate())
+}
+
+// TestConfigRejectsServiceOnPort22 pins the reserved-port check: port
+// 22 is always exposed by devm's SSH tunnel via computeExposeMap
+// (internal/serviceapi/expose.go), so a service also claiming it would
+// silently lose or win the ingress key in softnet's HostPort-keyed map.
+func TestConfigRejectsServiceOnPort22(t *testing.T) {
+	cfg := Config{
+		Project:  Project{Name: "p"},
+		Services: OrderedMapOf(map[string]Service{"impostor-ssh": {Port: 22}}),
+	}
+	err := cfg.Validate()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "port 22 is reserved")
+	assert.Contains(t, err.Error(), "impostor-ssh")
+}
+
+func TestConfigRejectsServiceNamesInReservedNamespaces(t *testing.T) {
+	for _, name := range []string{"devm-cron-x", "devm-snapshot-x", "devm-enforce", "gdevm-serve"} {
+		t.Run(name, func(t *testing.T) {
+			cfg := Config{
+				Project:  Project{Name: "p"},
+				Services: OrderedMapOf(map[string]Service{name: {Port: 8080}}),
+			}
+			err := cfg.Validate()
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "services."+name)
+			assert.Contains(t, err.Error(), "reserved")
+		})
+	}
+}
+
+func TestGeneratedUnitPrefixesAreReservedServicePrefixes(t *testing.T) {
+	for _, unitPrefix := range []string{CronUnitPrefix, SnapshotUnitPrefix} {
+		covered := false
+		for _, reserved := range ReservedServicePrefixes {
+			if strings.HasPrefix(unitPrefix, reserved) {
+				covered = true
+			}
+		}
+		assert.True(t, covered, "%q is not under a reserved service prefix", unitPrefix)
+	}
+}
+
+// TestServicePortPolymorphicUnmarshal exercises the single-field `port:`
+// polymorphic decode that accepts either an int (just sandbox port) or
+// a "IP:PORT" string (interface + sandbox port).
+func TestServicePortPolymorphicUnmarshal(t *testing.T) {
+	cases := []struct {
+		name     string
+		yaml     string
+		wantPort int
+		wantBind string
+	}{
+		{"int_form", "port: 80", 80, ""},
+		{"string_localhost", `port: "127.0.0.1:80"`, 80, "127.0.0.1"},
+		{"string_all_interfaces", `port: "0.0.0.0:8080"`, 8080, "0.0.0.0"},
+		{"string_specific_ip", `port: "192.168.1.10:5432"`, 5432, "192.168.1.10"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var s Service
+			require.NoError(t, yaml.Unmarshal([]byte(tc.yaml), &s))
+			assert.Equal(t, tc.wantPort, s.Port)
+			assert.Equal(t, tc.wantBind, s.BindIP)
+		})
+	}
+}
+
+// TestServicePortPolymorphicUnmarshalErrors checks rejected forms.
+func TestServicePortPolymorphicUnmarshalErrors(t *testing.T) {
+	cases := []struct {
+		name      string
+		yaml      string
+		wantInErr string
+	}{
+		{"bad_ip", `port: "not-an-ip:80"`, "valid IP"},
+		{"no_colon_string", `port: "abc"`, "IP:PORT"},
+		{"non_numeric_port", `port: "0.0.0.0:eighty"`, "not an integer"},
+		{"list_form_rejected", "port: [1, 2]", "integer or"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var s Service
+			err := yaml.Unmarshal([]byte(tc.yaml), &s)
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tc.wantInErr)
+		})
+	}
+}
+
+// TestServiceMarshalRoundTrip pins that a Service with a bound IP
+// round-trips through YAML in the polymorphic string form, while a
+// bare port round-trips as an int. Snapshot diff requires this.
+func TestServiceMarshalRoundTrip(t *testing.T) {
+	bound := Service{Port: 80, BindIP: "0.0.0.0"}
+	out, err := yaml.Marshal(bound)
+	require.NoError(t, err)
+	assert.Contains(t, string(out), `port: 0.0.0.0:80`)
+
+	bare := Service{Port: 8080}
+	out, err = yaml.Marshal(bare)
+	require.NoError(t, err)
+	assert.Contains(t, string(out), `port: 8080`)
+	assert.NotContains(t, string(out), `bind`)
+}
+
+// TestServiceDirectYAMLRoundTrip exercises the `direct:` field through the
+// real custom decode/encode path (serviceKnownFields, serviceYAML.Direct,
+// Service.UnmarshalYAML, Service.MarshalYAML) rather than Go struct
+// literals. This is the riskiest part of the direct-services change: get
+// one of the four decoder call sites wrong and `direct: true` in a real
+// devm.yaml either silently drops or hard-fails as an "unknown field".
+func TestServiceDirectYAMLRoundTrip(t *testing.T) {
+	var withDirect Service
+	require.NoError(t, yaml.Unmarshal([]byte("port: 5432\nhostname: db.test\ndirect: true\n"), &withDirect))
+	assert.True(t, withDirect.Direct)
+
+	var withoutDirect Service
+	require.NoError(t, yaml.Unmarshal([]byte("port: 5432\nhostname: db.test\n"), &withoutDirect))
+	assert.False(t, withoutDirect.Direct)
+
+	out, err := yaml.Marshal(withDirect)
+	require.NoError(t, err)
+	assert.Contains(t, string(out), "direct: true")
+
+	var roundTripped Service
+	require.NoError(t, yaml.Unmarshal(out, &roundTripped))
+	assert.True(t, roundTripped.Direct, "direct must survive marshal/unmarshal round-trip (snapshot storage relies on this)")
+}
+
+// TestServiceExposeHostYAMLRoundTrip exercises the `expose_host:` field
+// through the real custom decode/encode path (serviceKnownFields,
+// serviceYAML.ExposeHost, Service.UnmarshalYAML, Service.MarshalYAML)
+// rather than Go struct literals — same risk as TestServiceDirectYAMLRoundTrip.
+func TestServiceExposeHostYAMLRoundTrip(t *testing.T) {
+	var withExpose Service
+	require.NoError(t, yaml.Unmarshal([]byte("port: 80\nhostname: api.test\nexpose_host: true\n"), &withExpose))
+	assert.True(t, withExpose.ExposeHost)
+
+	var withoutExpose Service
+	require.NoError(t, yaml.Unmarshal([]byte("port: 80\nhostname: api.test\n"), &withoutExpose))
+	assert.False(t, withoutExpose.ExposeHost)
+
+	out, err := yaml.Marshal(withExpose)
+	require.NoError(t, err)
+	assert.Contains(t, string(out), "expose_host: true")
+
+	var roundTripped Service
+	require.NoError(t, yaml.Unmarshal(out, &roundTripped))
+	assert.True(t, roundTripped.ExposeHost, "expose_host must survive marshal/unmarshal round-trip (snapshot storage relies on this)")
+}
+
+// TestServiceExecYAMLRoundTrip_ScalarIsFunctionForm exercises the
+// `exec:` field's scalar shape through the real custom decode/encode
+// path (serviceYAML.Exec, Service.decodeExecNode, Service.MarshalYAML)
+// — a bare scalar names a devm.sh/devm.me.sh function, not a literal
+// command.
+func TestServiceExecYAMLRoundTrip_ScalarIsFunctionForm(t *testing.T) {
+	var svc Service
+	require.NoError(t, yaml.Unmarshal([]byte("exec: start-worker\n"), &svc))
+	assert.Equal(t, "start-worker", svc.ExecFunc)
+	assert.Empty(t, svc.ExecArgv)
+
+	out, err := yaml.Marshal(svc)
+	require.NoError(t, err)
+	assert.Contains(t, string(out), "exec: start-worker")
+
+	var roundTripped Service
+	require.NoError(t, yaml.Unmarshal(out, &roundTripped))
+	assert.Equal(t, "start-worker", roundTripped.ExecFunc)
+}
+
+// TestServiceExecYAMLRoundTrip_SequenceIsArgvForm exercises the
+// `exec:` field's sequence shape — a list is a literal argv, run with
+// no shell.
+func TestServiceExecYAMLRoundTrip_SequenceIsArgvForm(t *testing.T) {
+	var svc Service
+	require.NoError(t, yaml.Unmarshal([]byte("exec:\n  - /usr/bin/redis-server\n  - --save\n"), &svc))
+	assert.Equal(t, []string{"/usr/bin/redis-server", "--save"}, svc.ExecArgv)
+	assert.Empty(t, svc.ExecFunc)
+
+	out, err := yaml.Marshal(svc)
+	require.NoError(t, err)
+
+	var roundTripped Service
+	require.NoError(t, yaml.Unmarshal(out, &roundTripped))
+	assert.Equal(t, []string{"/usr/bin/redis-server", "--save"}, roundTripped.ExecArgv)
+}
+
+func TestServiceExecYAML_MappingRejected(t *testing.T) {
+	var svc Service
+	err := yaml.Unmarshal([]byte("exec:\n  foo: bar\n"), &svc)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "exec")
+}
+
+func TestService_Validate_ExposeHostRequiresHostname(t *testing.T) {
+	svc := Service{
+		Port:       80,
+		ExposeHost: true,
+		// no Hostname
+	}
+	err := svc.Validate()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "expose_host")
+	assert.Contains(t, err.Error(), "hostname")
+}
+
+func TestService_Validate_ExposeHostWithHostnameOK(t *testing.T) {
+	svc := Service{
+		Port:       80,
+		Hostname:   "api.myapp.test",
+		ExposeHost: true,
+	}
+	assert.NoError(t, svc.Validate())
+}
+
+func TestService_Validate_ExposeHostFalseIsFine(t *testing.T) {
+	svc := Service{Port: 80}
+	assert.NoError(t, svc.Validate()) // no hostname, expose_host default false — ok
+}
+
+func TestServiceValidatePortBindCoupling(t *testing.T) {
+	// BindIP without Port is invalid.
+	bad := Service{BindIP: "0.0.0.0"}
+	err := bad.Validate()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "bind interface requires")
+}
+
+func TestServiceResolveBind(t *testing.T) {
+	assert.Equal(t, "127.0.0.1", Service{Port: 80}.ResolveBind())
+	assert.Equal(t, "0.0.0.0", Service{Port: 80, BindIP: "0.0.0.0"}.ResolveBind())
+	assert.Equal(t, "192.168.1.10", Service{Port: 5432, BindIP: "192.168.1.10"}.ResolveBind())
+}
+
+func TestCheckUnknownKeys_NetworkChild_Rejected(t *testing.T) {
+	// network.allowed_domains was renamed to network.allow; with no
+	// legacy-migration layer it surfaces as a plain unknown-field error.
+	yaml := []byte(`
+project:
+  name: x
+network:
+  allowed_domains:
+    - example.com
+`)
+	err := CheckUnknownKeys(yaml)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "unknown field")
+	assert.Contains(t, err.Error(), "allowed_domains")
+	assert.Contains(t, err.Error(), "network")
+}
+
+func TestCheckUnknownKeys_UnknownProjectKey_Rejected(t *testing.T) {
+	yaml := []byte(`
+project:
+  name: x
+  sandbox_name: x-sbx
+`)
+	err := CheckUnknownKeys(yaml)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "unknown field")
+	assert.Contains(t, err.Error(), "sandbox_name")
+}
+
+func TestCheckUnknownKeys_BaseImageChild_Rejected(t *testing.T) {
+	// Any unknown child of base_image should surface a clear "this block
+	// accepts no fields" error rather than being silently dropped by
+	// yaml.Unmarshal.
+	yaml := []byte(`
+project:
+  name: x
+base_image:
+  registry: foo.bar
+`)
+	err := CheckUnknownKeys(yaml)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "unknown field")
+	assert.Contains(t, err.Error(), "base_image")
+	assert.Contains(t, err.Error(), "this block accepts no fields")
+}
+
+func TestCheckUnknownKeys_TopLevel_Rejected(t *testing.T) {
+	yamlBlob := []byte(`
+project:
+  name: foo
+volumez:
+  /data: 1G
+`)
+	err := CheckUnknownKeys(yamlBlob)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), `unknown field`)
+	assert.Contains(t, err.Error(), `volumez`)
+	// Valid fields should be listed (so the user knows what IS allowed).
+	assert.Contains(t, err.Error(), `services`)
+}
+
+// TestCheckUnknownKeys_BatchesAllUnknownsInOnePass pins the
+// Finding-11h fix: a cross-version migration surfaces its full
+// delta on one `devm validate` run instead of one key per re-run.
+func TestCheckUnknownKeys_BatchesAllUnknownsInOnePass(t *testing.T) {
+	yamlBlob := []byte(`
+project:
+  name: foo
+scripts:
+  - echo hi
+startup:
+  - true
+mounts:
+  - /tmp
+`)
+	err := CheckUnknownKeys(yamlBlob)
+	require.Error(t, err)
+	msg := err.Error()
+	assert.Contains(t, msg, `"scripts"`, "scripts must be surfaced")
+	assert.Contains(t, msg, `"startup"`, "startup must be surfaced")
+	assert.Contains(t, msg, `"mounts"`, "mounts must be surfaced")
+}
+
+// TestCheckUnknownKeys_RemovedKeyNamesReplacement pins the migration
+// hint: a removed top-level key tells the operator where the
+// functionality moved to.
+func TestCheckUnknownKeys_RemovedKeyNamesReplacement(t *testing.T) {
+	yamlBlob := []byte(`
+project:
+  name: foo
+mounts:
+  - /tmp
+`)
+	err := CheckUnknownKeys(yamlBlob)
+	require.Error(t, err)
+	msg := err.Error()
+	assert.Contains(t, msg, `"mounts"`)
+	assert.Contains(t, msg, `was removed`)
+	assert.Contains(t, msg, `repos`, "the hint must name the replacement")
+}
+
+func TestCheckUnknownKeys_ProjectLevel_Rejected(t *testing.T) {
+	yamlBlob := []byte(`
+project:
+  name: foo
+  proxie: caddy
+`)
+	err := CheckUnknownKeys(yamlBlob)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), `unknown field`)
+	assert.Contains(t, err.Error(), `proxie`)
+}
+
+func TestCheckUnknownKeys_AllValidFields_Accepted(t *testing.T) {
+	yamlBlob := []byte(`
+project:
+  name: foo
+  proxy: caddy
+base_image: {}
+docker:
+  enabled: true
+network:
+  allow: [github.com]
+env:
+  EDITOR: vim
+services:
+  api:
+    port: 8080
+path:
+  - $WORKSPACE/bin
+packages:
+  - jq
+volumes:
+  data: /var/data
+ssh:
+  - myhost
+`)
+	require.NoError(t, CheckUnknownKeys(yamlBlob))
+}
+
+func TestCheckUnknownKeys_DockerTopLevel_Accepted(t *testing.T) {
+	yamlBlob := []byte(`
+project:
+  name: foo
+docker:
+  enabled: true
+`)
+	require.NoError(t, CheckUnknownKeys(yamlBlob))
+}
+
+func TestCheckUnknownKeys_EmptyAndMinimal_Accepted(t *testing.T) {
+	require.NoError(t, CheckUnknownKeys([]byte("")))
+	require.NoError(t, CheckUnknownKeys([]byte(`project:
+  name: foo
+`)))
+}
+
+func TestTemplateValidate(t *testing.T) {
+	// Valid.
+	ok := Template{Source: "configs/foo.tmpl", Output: "/etc/foo"}
+	assert.NoError(t, ok.Validate())
+
+	// Missing source.
+	assert.Error(t, Template{Output: "/etc/foo"}.Validate())
+
+	// Missing output.
+	assert.Error(t, Template{Source: "foo.tmpl"}.Validate())
+
+	// Path traversal in source — rejected.
+	bad := Template{Source: "../etc/passwd", Output: "/etc/foo"}
+	err := bad.Validate()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "path traversal")
+
+	// Cleaned form still escapes — rejected.
+	bad2 := Template{Source: "configs/../../etc/passwd", Output: "/etc/foo"}
+	assert.Error(t, bad2.Validate())
+
+	// Output must be absolute.
+	rel := Template{Source: "foo.tmpl", Output: "etc/foo"}
+	err = rel.Validate()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "absolute")
+}
+
+func TestService_SystemdOverride_ExclusiveWithDeclarative(t *testing.T) {
+	s := Service{
+		Systemd:  "[Unit]\n[Service]\nExecStart=/bin/true",
+		ExecArgv: []string{"/bin/true"},
+	}
+	err := s.Validate()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "mutually exclusive")
+}
+
+func TestService_Restart_ValidValues(t *testing.T) {
+	cases := []struct {
+		val string
+		ok  bool
+	}{
+		{"", true},
+		{"no", true},
+		{"on-failure", true},
+		{"always", true},
+		{"yes", false},
+		{"sometimes", false},
+	}
+	for _, c := range cases {
+		t.Run(c.val, func(t *testing.T) {
+			s := Service{ExecArgv: []string{"/bin/true"}, Restart: c.val}
+			err := s.Validate()
+			if c.ok {
+				require.NoError(t, err)
+			} else {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), "restart")
+			}
+		})
+	}
+}
+
+func TestPackages_TopLevelAccepted(t *testing.T) {
+	cfg := Config{
+		Project:  Project{Name: "x"},
+		Packages: []string{"jq", "postgresql-client"},
+	}
+	require.NoError(t, cfg.Validate())
+}
+
+func TestCheckUnknownKeys_RejectsLegacyPortOffset(t *testing.T) {
+	yamlText := []byte(`
+project:
+  name: x
+  port_offset: 51000
+`)
+	err := CheckUnknownKeys(yamlText)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "port_offset")
+}
+
+func TestParse_SecretTag_AsSecretRef(t *testing.T) {
+	const yamlSrc = `
+project:
+  name: x
+services:
+  api:
+    exec: ["/bin/true"]
+    env:
+      GITHUB_TOKEN: !secret github_token
+      PLAIN: hello
+`
+	var cfg Config
+	require.NoError(t, yaml.Unmarshal([]byte(yamlSrc), &cfg))
+	svc := cfg.Services.Entries["api"]
+	require.NotNil(t, svc.Env["GITHUB_TOKEN"].Secret)
+	assert.Equal(t, "github_token", svc.Env["GITHUB_TOKEN"].Secret.Name)
+	assert.Equal(t, "", svc.Env["GITHUB_TOKEN"].Literal)
+	assert.Equal(t, "hello", svc.Env["PLAIN"].Literal)
+	assert.Nil(t, svc.Env["PLAIN"].Secret)
+}
+
+func TestParse_NetworkAllow_StringsAndMappings(t *testing.T) {
+	const yamlSrc = `
+project:
+  name: x
+network:
+  allow:
+    - github.com
+    - "*.npmjs.org"
+    - host: api.github.com
+      secrets: [github_token]
+    - "*"
+`
+	var cfg Config
+	require.NoError(t, yaml.Unmarshal([]byte(yamlSrc), &cfg))
+	require.Len(t, cfg.Network.Allow, 4)
+	assert.Equal(t, AllowEntry{Host: "github.com"}, cfg.Network.Allow[0])
+	assert.Equal(t, AllowEntry{Host: "*.npmjs.org"}, cfg.Network.Allow[1])
+	assert.Equal(t, AllowEntry{Host: "api.github.com", Secrets: []string{"github_token"}}, cfg.Network.Allow[2])
+	assert.Equal(t, AllowEntry{Host: "*"}, cfg.Network.Allow[3])
+}
+
+func TestNetworkAllow_MappingWithoutHost_Errors(t *testing.T) {
+	const yamlSrc = `
+network:
+  allow:
+    - secrets: [x]
+`
+	var cfg Config
+	err := yaml.Unmarshal([]byte(yamlSrc), &cfg)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "host is required")
+}
+
+func TestNetwork_Domains(t *testing.T) {
+	n := Network{Allow: []AllowEntry{
+		{Host: "github.com"},
+		{Host: "api.github.com", Secrets: []string{"github_token"}},
+		{Host: "*"},
+	}}
+	assert.Equal(t, []string{"github.com", "api.github.com", "*"}, n.Domains())
+}
+
+func TestNetwork_SecretHosts_UnionsHostsPerSecret(t *testing.T) {
+	n := Network{Allow: []AllowEntry{
+		{Host: "api.github.com", Secrets: []string{"gh"}},
+		{Host: "uploads.github.com", Secrets: []string{"gh"}},
+		{Host: "api.openai.com", Secrets: []string{"openai"}},
+		{Host: "*"}, // no secrets — contributes nothing
+	}}
+	got := n.SecretHosts()
+	assert.Equal(t, []string{"api.github.com", "uploads.github.com"}, got["gh"])
+	assert.Equal(t, []string{"api.openai.com"}, got["openai"])
+	assert.Len(t, got, 2)
+}
+
+func TestAllowEntry_HostPartAndPathPattern(t *testing.T) {
+	cases := []struct {
+		entry string
+		host  string
+		path  string
+	}{
+		{"github.com", "github.com", ""},
+		{"*.npmjs.org", "*.npmjs.org", ""},
+		{"*", "*", ""},
+		{"release-assets.githubusercontent.com/github-production-release-asset/834082440/*",
+			"release-assets.githubusercontent.com", "/github-production-release-asset/834082440/*"},
+		{"*.githubusercontent.com/foo/*", "*.githubusercontent.com", "/foo/*"},
+		{"api.github.com/repos/o/r/releases", "api.github.com", "/repos/o/r/releases"},
+	}
+	for _, c := range cases {
+		e := AllowEntry{Host: c.entry}
+		assert.Equal(t, c.host, e.HostPart(), "HostPart(%q)", c.entry)
+		assert.Equal(t, c.path, e.PathPattern(), "PathPattern(%q)", c.entry)
+	}
+}
+
+func TestNetworkAllow_Validate_PathEntries(t *testing.T) {
+	valid := []string{
+		"github.com",
+		"release-assets.githubusercontent.com/github-production-release-asset/834082440/*",
+		"api.github.com/repos/o/r/releases",
+		"*.example.com/dl/*",
+	}
+	for _, h := range valid {
+		n := Network{Allow: []AllowEntry{{Host: h}}}
+		assert.NoError(t, n.validate(), "expected %q to validate", h)
+	}
+	invalid := []struct {
+		host    string
+		errPart string
+	}{
+		{"https://github.com/foo", "scheme"},
+		{"github.com/", "path"},
+		{"github.com/dl?ref=x", "query"},
+		{"github.com/dl#frag", "fragment"},
+		{"/just/a/path", "host"},
+		{"", "host"},
+	}
+	for _, c := range invalid {
+		n := Network{Allow: []AllowEntry{{Host: c.host}}}
+		err := n.validate()
+		require.Error(t, err, "expected %q to be rejected", c.host)
+		assert.Contains(t, err.Error(), c.errPart, "error for %q", c.host)
+	}
+}
+
+// TestNetwork_Domains_KeepsFullEntry pins that Domains() preserves the
+// path-bearing form verbatim: the reconcile diff and the daemon wire
+// both carry the full entry so a path edit is a visible change.
+func TestNetwork_Domains_KeepsFullEntry(t *testing.T) {
+	n := Network{Allow: []AllowEntry{
+		{Host: "github.com"},
+		{Host: "release-assets.githubusercontent.com/gh-prod/834082440/*"},
+	}}
+	assert.Equal(t, []string{
+		"github.com",
+		"release-assets.githubusercontent.com/gh-prod/834082440/*",
+	}, n.Domains())
+}
+
+// TestNetwork_SecretHosts_UsesHostPart pins that secret injection scope
+// is the host part only: iron-proxy secret rules are host-based, and a
+// path-scoped allow entry must not leak its path into the secret rule.
+func TestNetwork_SecretHosts_UsesHostPart(t *testing.T) {
+	n := Network{Allow: []AllowEntry{
+		{Host: "api.github.com/repos/*", Secrets: []string{"gh"}},
+		{Host: "uploads.github.com", Secrets: []string{"gh"}},
+	}}
+	assert.Equal(t, []string{"api.github.com", "uploads.github.com"}, n.SecretHosts()["gh"])
+}
+
+func TestEnvValue_TokenFor(t *testing.T) {
+	assert.Equal(t, "__DEVM_SECRET_github_token__", TokenFor("github_token"))
+	assert.Equal(t, "__DEVM_SECRET_x__", TokenFor("x"))
+}
+
+func TestEnvValue_Render_LiteralAndSecret(t *testing.T) {
+	literal := EnvValue{Literal: "hello"}
+	assert.Equal(t, "hello", literal.Render())
+
+	secret := EnvValue{Secret: &SecretRef{Name: "foo"}}
+	assert.Equal(t, "__DEVM_SECRET_foo__", secret.Render())
+}
+
+func TestEnvValue_IsSecret(t *testing.T) {
+	assert.False(t, EnvValue{Literal: "val"}.IsSecret())
+	assert.True(t, EnvValue{Secret: &SecretRef{Name: "x"}}.IsSecret())
+}
+
+func TestParse_TopLevel_SecretTag_AsSecretRef(t *testing.T) {
+	// !secret can also appear in the top-level env: map.
+	const yamlSrc = `
+project:
+  name: x
+env:
+  API_KEY: !secret my_api_key
+  PLAIN: world
+`
+	var cfg Config
+	require.NoError(t, yaml.Unmarshal([]byte(yamlSrc), &cfg))
+	require.NotNil(t, cfg.Env["API_KEY"].Secret)
+	assert.Equal(t, "my_api_key", cfg.Env["API_KEY"].Secret.Name)
+	assert.Equal(t, "world", cfg.Env["PLAIN"].Literal)
+}
+
+func TestEnvValue_Render_SecretUsesTokenFor(t *testing.T) {
+	// Render() for a SecretRef must produce the same string as TokenFor().
+	name := "some_secret"
+	ev := EnvValue{Secret: &SecretRef{Name: name}}
+	assert.Equal(t, TokenFor(name), ev.Render())
+}
+
+// TestParse_SecretInOverrideFile exercises !secret decoding via
+// the serviceOverrideYAML path (serviceOverride.Env is map[string]EnvValue).
+func TestParse_SecretInServiceOverrideEnv(t *testing.T) {
+	const yamlSrc = `
+services:
+  api:
+    env:
+      TOKEN: !secret my_token
+`
+	var override ConfigOverride
+	require.NoError(t, yaml.Unmarshal([]byte(yamlSrc), &override))
+	svc := override.Services["api"]
+	require.NotNil(t, svc.Env["TOKEN"].Secret)
+	assert.Equal(t, "my_token", svc.Env["TOKEN"].Secret.Name)
+}
+
+func TestWriteInTempDir_SecretTagPreservedThroughEnvFile(t *testing.T) {
+	// Secret tokens render as the opaque __DEVM_SECRET_<name>__ form
+	// in the devm.yaml temp-dir parse path. (Full Load path via
+	// internal/config skips secrets in ResolveEnv, passing them through.)
+	// This test covers the schema-level Render() contract only.
+	tmp := t.TempDir()
+	const yamlSrc = `
+project:
+  name: x
+services:
+  api:
+    exec: ["/bin/true"]
+    env:
+      TOKEN: !secret gh_token
+`
+	require.NoError(t, os.WriteFile(filepath.Join(tmp, "devm.yaml"), []byte(yamlSrc), 0o644))
+	data, err := os.ReadFile(filepath.Join(tmp, "devm.yaml"))
+	require.NoError(t, err)
+	var cfg Config
+	require.NoError(t, yaml.Unmarshal(data, &cfg))
+	token := cfg.Services.Entries["api"].Env["TOKEN"]
+	require.NotNil(t, token.Secret)
+	assert.Equal(t, "__DEVM_SECRET_gh_token__", token.Render())
+}
+
+func TestConfig_Decode_DockerBlock(t *testing.T) {
+	src := `
+project:
+  name: p
+docker:
+  enabled: true
+  buildCache: "6G"
+`
+	var cfg Config
+	require.NoError(t, yaml.Unmarshal([]byte(src), &cfg))
+	require.NotNil(t, cfg.Docker)
+	assert.True(t, cfg.Docker.Enabled)
+	require.NotNil(t, cfg.Docker.BuildCache)
+	assert.Equal(t, "6G", *cfg.Docker.BuildCache)
+}
+
+func TestConfig_Decode_DockerEnabledOnly(t *testing.T) {
+	src := `
+project:
+  name: p
+docker:
+  enabled: true
+`
+	var cfg Config
+	require.NoError(t, yaml.Unmarshal([]byte(src), &cfg))
+	require.NotNil(t, cfg.Docker)
+	assert.True(t, cfg.Docker.Enabled)
+	assert.Nil(t, cfg.Docker.BuildCache, "buildCache absent → nil")
+}
+
+func TestConfig_Decode_DockerBool(t *testing.T) {
+	// The old scalar shape `docker: true` must fail loudly at decode —
+	// there is no migration shim.
+	src := `
+project:
+  name: p
+docker: true
+`
+	var cfg Config
+	err := yaml.Unmarshal([]byte(src), &cfg)
+	require.Error(t, err)
+	assert.Contains(t, strings.ToLower(err.Error()), "docker")
+}
+
+func TestConfig_Decode_DockerUnknownNested(t *testing.T) {
+	// A typo inside the docker block (buildCahe → buildCache) must be
+	// rejected by CheckUnknownKeys, naming both the typo and the valid
+	// field set. yaml.Unmarshal alone is permissive; config.Load runs
+	// CheckUnknownKeys to catch typos.
+	src := []byte(`
+project:
+  name: p
+docker:
+  enabled: true
+  buildCahe: "6G"
+`)
+	err := CheckUnknownKeys(src)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "buildCahe")
+	assert.Contains(t, err.Error(), "enabled")
+	assert.Contains(t, err.Error(), "buildCache")
+}
+
+func TestConfig_Decode_Swap(t *testing.T) {
+	cases := []struct {
+		name string
+		src  string
+		want string
+	}{
+		{"absolute", "project:\n  name: p\nswap: \"16G\"\n", "16G"},
+		{"percent", "project:\n  name: p\nswap: \"30%\"\n", "30%"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			var cfg Config
+			require.NoError(t, yaml.Unmarshal([]byte(c.src), &cfg))
+			require.NotNil(t, cfg.Swap)
+			assert.Equal(t, c.want, *cfg.Swap)
+		})
+	}
+}
+
+func TestConfig_Validate_RejectsMalformed(t *testing.T) {
+	// Both swap and docker.buildCache malformed → one batched
+	// errors.Join so a `devm validate` run surfaces every problem at
+	// once rather than one-per-fix iteration.
+	badSwap := "abc"
+	badCache := "0%"
+	cfg := Config{
+		Project: Project{Name: "p"},
+		Swap:    &badSwap,
+		Docker:  &DockerConfig{Enabled: true, BuildCache: &badCache},
+	}
+	err := cfg.Validate()
+	require.Error(t, err)
+	msg := err.Error()
+	assert.Contains(t, msg, "swap")
+	assert.Contains(t, msg, "abc")
+	assert.Contains(t, msg, "buildCache")
+	assert.Contains(t, msg, "0%")
+}
+
+func TestConfig_DockerEnabled(t *testing.T) {
+	assert.False(t, Config{}.DockerEnabled(),
+		"nil Docker → off")
+	assert.False(t, Config{Docker: &DockerConfig{Enabled: false}}.DockerEnabled(),
+		"explicit Enabled: false → off")
+	assert.True(t, Config{Docker: &DockerConfig{Enabled: true}}.DockerEnabled(),
+		"Enabled: true → on")
+}
+
+func TestDiskSizeParsing(t *testing.T) {
+	cases := []struct {
+		in    string
+		gib   int
+		valid bool
+	}{
+		{"64G", 64, true},
+		{"64GB", 64, true},
+		{"32g", 32, true},
+		{"128", 0, false},   // missing unit
+		{"64.5G", 0, false}, // non-integer
+		{"0G", 0, false},    // zero
+		{"-8G", 0, false},   // negative
+		{"abcG", 0, false},  // non-numeric magnitude
+	}
+	for _, c := range cases {
+		cfg := Config{Project: Project{Name: "x"}, Disk: strPtr(c.in)}
+		err := cfg.Validate()
+		if !c.valid {
+			assert.Error(t, err, "expected %q rejected", c.in)
+			continue
+		}
+		require.NoError(t, err, "expected %q accepted", c.in)
+		require.NotNil(t, cfg.Disk)
+		gib, err := ParseDiskSize(*cfg.Disk)
+		require.NoError(t, err)
+		assert.Equal(t, c.gib, gib)
+	}
+}
+
+func TestDiskSizeBelowFloorRejected(t *testing.T) {
+	cfg := Config{Project: Project{Name: "x"}, Disk: strPtr("16G")}
+	err := cfg.Validate()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "minimum")
+}
+
+func TestDiskUnsetHasNoOverride(t *testing.T) {
+	cfg := Config{Project: Project{Name: "x"}}
+	require.NoError(t, cfg.Validate())
+	assert.Nil(t, cfg.Disk)
+}
+
+func TestCheckUnknownKeysAllowsDisk(t *testing.T) {
+	require.NoError(t, CheckUnknownKeys([]byte("disk: 64G\nproject:\n  name: x\n")))
+}
+
+func TestConfig_ReposMap_UnmarshalYAML(t *testing.T) {
+	y := `project:
+  name: shelfmates
+repos:
+  main:
+    secret: github
+    primary: true
+  data:
+    url: git@github.com:me/data.git
+    secret: github
+`
+	var c Config
+	require.NoError(t, yaml.Unmarshal([]byte(y), &c))
+	require.Contains(t, c.Repos, "main")
+	require.Contains(t, c.Repos, "data")
+	assert.Equal(t, "github", c.Repos["main"].Secret)
+	assert.NotNil(t, c.Repos["main"].Primary)
+}
+
+func TestConfig_RejectsTopLevelRepo(t *testing.T) {
+	y := `project:
+  name: x
+repo:
+  url: git@github.com:me/foo.git
+  secret: github
+`
+	// The singular top-level repo: key is gone; CheckUnknownKeys (the
+	// mechanism config.Load uses to reject removed/typo'd keys) must
+	// name it. Plain yaml.Unmarshal is permissive by default — Config
+	// deliberately does NOT implement its own UnmarshalYAML, since
+	// doing so would swallow the KnownFields(true) strict-decode used
+	// by config.Load for nested blocks (see strictDecode in
+	// internal/config/load.go).
+	err := CheckUnknownKeys([]byte(y))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "unknown field \"repo\"")
+}
+
+func TestScripts_UnknownTopLevelKey_Rejected(t *testing.T) {
+	in := []byte(`
+project:
+  name: p
+scriptz:
+  install-supabase:
+    - echo one
+`)
+	err := CheckUnknownKeys(in)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "scriptz")
+}
+
+func secretEnv(name string, keys ...string) map[string]EnvValue {
+	env := map[string]EnvValue{}
+	for _, k := range keys {
+		env[k] = EnvValue{Secret: &SecretRef{Name: name}}
+	}
+	return env
+}
+
+func TestValidate_Secrets_BoundBothSides_OK(t *testing.T) {
+	cfg := &Config{
+		Project: Project{Name: "p"},
+		Env:     secretEnv("github_token", "GH_TOKEN"),
+		Network: Network{Allow: []AllowEntry{
+			{Host: "api.github.com", Secrets: []string{"github_token"}},
+		}},
+	}
+	assert.NoError(t, cfg.Validate())
+}
+
+// One secret may back several env var names — gh reads GH_TOKEN, other
+// tooling reads GITHUB_TOKEN. Naming it once under network.allow covers
+// both; the fan-out must not be mistaken for an unbound secret.
+func TestValidate_Secrets_ManyEnvNamesOneSecret_OK(t *testing.T) {
+	cfg := &Config{
+		Project: Project{Name: "p"},
+		Env:     secretEnv("github_token", "GH_TOKEN", "GITHUB_TOKEN"),
+		Network: Network{Allow: []AllowEntry{
+			{Host: "api.github.com", Secrets: []string{"github_token"}},
+		}},
+	}
+	assert.NoError(t, cfg.Validate())
+}
+
+func TestValidate_Secrets_EnvRefWithNoHost_Rejected(t *testing.T) {
+	cfg := &Config{
+		Project: Project{Name: "p"},
+		Env:     secretEnv("anthropic_key", "ANTHROPIC_API_KEY"),
+		Network: Network{Allow: []AllowEntry{{Host: "api.anthropic.com"}}},
+	}
+	err := cfg.Validate()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), `"anthropic_key"`)
+	assert.Contains(t, err.Error(), "bound to no host")
+}
+
+func TestValidate_Secrets_HostBoundButNotInEnv_Rejected(t *testing.T) {
+	cfg := &Config{
+		Project: Project{Name: "p"},
+		Network: Network{Allow: []AllowEntry{
+			{Host: "api.github.com", Secrets: []string{"github_token"}},
+		}},
+	}
+	err := cfg.Validate()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), `"github_token"`)
+	assert.Contains(t, err.Error(), "never referenced by an env value")
+}
+
+// Per-service env is a delivery site too — a secret referenced only
+// inside services.<name>.env is still delivered to the guest.
+func TestValidate_Secrets_ServiceEnvCounts(t *testing.T) {
+	cfg := &Config{
+		Project: Project{Name: "p"},
+		Services: OrderedMapOf(map[string]Service{
+			"web": {Port: 3000, Env: secretEnv("api_key", "API_KEY")},
+		}),
+		Network: Network{Allow: []AllowEntry{
+			{Host: "api.example.com", Secrets: []string{"api_key"}},
+		}},
+	}
+	assert.NoError(t, cfg.Validate())
+}
+
+func TestValidate_Secrets_NoSecretsAnywhere_OK(t *testing.T) {
+	cfg := &Config{
+		Project: Project{Name: "p"},
+		Env:     map[string]EnvValue{"PLAIN": {Literal: "value"}},
+		Network: Network{Allow: []AllowEntry{{Host: "example.com"}}},
+	}
+	assert.NoError(t, cfg.Validate())
+}
+
+func strPtr(s string) *string { return &s }
+func boolPtr(b bool) *bool    { return &b }
+
+// ---------- validateRepos: primary determination ----------
+
+func TestValidateRepos_PrimaryDetermination(t *testing.T) {
+	t.Run("explicit primary true valid", func(t *testing.T) {
+		c := Config{Repos: map[string]RepoConfig{
+			"main":   {URL: strPtr("git@github.com:me/main.git"), Primary: boolPtr(true)},
+			"second": {URL: strPtr("git@github.com:me/second.git")},
+		}}
+		assert.NoError(t, c.validateRepos())
+	})
+
+	t.Run("two explicit primaries error", func(t *testing.T) {
+		c := Config{Repos: map[string]RepoConfig{
+			"main":   {URL: strPtr("git@github.com:me/main.git"), Primary: boolPtr(true)},
+			"second": {URL: strPtr("git@github.com:me/second.git"), Primary: boolPtr(true)},
+		}}
+		err := c.validateRepos()
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "multiple entries with primary: true")
+	})
+
+	t.Run("exactly one url-omitted implies primary", func(t *testing.T) {
+		c := Config{Repos: map[string]RepoConfig{
+			"main":   {},
+			"second": {URL: strPtr("git@github.com:me/second.git")},
+		}}
+		assert.NoError(t, c.validateRepos())
+	})
+
+	t.Run("zero url-omitted no explicit primary errors", func(t *testing.T) {
+		c := Config{Repos: map[string]RepoConfig{
+			"main":   {URL: strPtr("git@github.com:me/main.git")},
+			"second": {URL: strPtr("git@github.com:me/second.git")},
+		}}
+		err := c.validateRepos()
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "no primary")
+	})
+
+	t.Run("two url-omitted no explicit primary errors", func(t *testing.T) {
+		c := Config{Repos: map[string]RepoConfig{
+			"main":   {},
+			"second": {},
+		}}
+		err := c.validateRepos()
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "multiple entries without a `url:`")
+	})
+
+	t.Run("primary marked volume false errors", func(t *testing.T) {
+		c := Config{Repos: map[string]RepoConfig{
+			"main":   {Primary: boolPtr(true), Volume: boolPtr(false)},
+			"second": {URL: strPtr("git@github.com:me/second.git")},
+		}}
+		err := c.validateRepos()
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "primary cannot have volume: false")
+	})
+}
+
+// ---------- validateRepos: secondaries require url ----------
+
+func TestValidateRepos_SecondaryRequiresURL(t *testing.T) {
+	t.Run("secondary with nil url errors naming it", func(t *testing.T) {
+		c := Config{Repos: map[string]RepoConfig{
+			"main":      {URL: strPtr("git@github.com:me/main.git"), Primary: boolPtr(true)},
+			"secondary": {},
+		}}
+		err := c.validateRepos()
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "repos.secondary")
+		assert.Contains(t, err.Error(), "url is required")
+	})
+
+	t.Run("two secondaries, only the nil-url one is named", func(t *testing.T) {
+		c := Config{Repos: map[string]RepoConfig{
+			"main":  {URL: strPtr("git@github.com:me/main.git"), Primary: boolPtr(true)},
+			"good":  {URL: strPtr("git@github.com:me/good.git")},
+			"badly": {},
+		}}
+		err := c.validateRepos()
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "repos.badly")
+		assert.Contains(t, err.Error(), "url is required")
+		assert.NotContains(t, err.Error(), "repos.good")
+	})
+}
+
+// ---------- validateLabels: cross-schema flat-namespace collision ----------
+
+func TestValidateLabels_Collision(t *testing.T) {
+	t.Run("two repos derive same label errors naming both and the label", func(t *testing.T) {
+		c := Config{Repos: map[string]RepoConfig{
+			"main":  {URL: strPtr("git@github.com:me/foo.git")},
+			"other": {URL: strPtr("git@github.com:them/foo.git")},
+		}}
+		err := c.validateLabels("")
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), `label "foo"`)
+		assert.Contains(t, err.Error(), "repos.main")
+		assert.Contains(t, err.Error(), "repos.other")
+	})
+
+	t.Run("explicit label resolves the collision", func(t *testing.T) {
+		c := Config{Repos: map[string]RepoConfig{
+			"main":  {URL: strPtr("git@github.com:me/foo.git")},
+			"other": {URL: strPtr("git@github.com:them/foo.git"), Label: strPtr("other-foo")},
+		}}
+		assert.NoError(t, c.validateLabels(""))
+	})
+
+	t.Run("repo label collides with volume label", func(t *testing.T) {
+		c := Config{
+			Repos: map[string]RepoConfig{
+				"main": {URL: strPtr("git@github.com:me/claude.git")},
+			},
+			Volumes: map[string]Volume{
+				"claude": {Path: "/home/devm/claude"},
+			},
+		}
+		err := c.validateLabels("")
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), `label "claude"`)
+		assert.Contains(t, err.Error(), "repos.main")
+		assert.Contains(t, err.Error(), "volumes.claude")
+	})
+
+	t.Run("cwd placeholder fallback used only when macCwd empty", func(t *testing.T) {
+		c := Config{
+			Repos: map[string]RepoConfig{
+				"main": {}, // URL-nil primary; label derives from macCwd
+			},
+			Volumes: map[string]Volume{
+				"placeholder": {Path: "/x", Label: strPtr("__cwd__")},
+			},
+		}
+		// No macCwd supplied: main's label falls back to the "__cwd__"
+		// placeholder, which collides with the volume's explicit label.
+		err := c.validateLabels("")
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), `label "__cwd__"`)
+
+		// A real macCwd derives "myproj" instead — no collision.
+		assert.NoError(t, c.validateLabels("/Users/me/myproj"))
+	})
+}
+
+// ---------- IsValidLabel + SanitizeDerivedLabel ----------
+
+func TestIsValidLabel(t *testing.T) {
+	for _, tc := range []struct {
+		label string
+		want  bool
+	}{
+		{"claude", true},
+		{"foo-bar", true},
+		{"foo_bar", true},
+		{"a1", true},
+		{"1a", true},
+		{"", false},
+		{".claude", false},
+		{"-leading", false},
+		{"_leading", false},
+		{"foo.bar", false},
+		{"foo bar", false},
+		{"foo/bar", false},
+	} {
+		t.Run(tc.label, func(t *testing.T) {
+			assert.Equal(t, tc.want, IsValidLabel(tc.label))
+		})
+	}
+}
+
+func TestSanitizeDerivedLabel(t *testing.T) {
+	assert.Equal(t, "claude", SanitizeDerivedLabel(".claude"))
+	assert.Equal(t, "data", SanitizeDerivedLabel("data"))
+	assert.Equal(t, "share", SanitizeDerivedLabel("share"))
+	assert.Equal(t, "", SanitizeDerivedLabel(""))
+	// Only leading dot is stripped; interior dots stay (validate catches them).
+	assert.Equal(t, "foo.bar", SanitizeDerivedLabel("foo.bar"))
+	// Only one leading dot; ".." → "." (still invalid; validate catches).
+	assert.Equal(t, ".", SanitizeDerivedLabel(".."))
+}
+
+// TestVolumeResolveLabel_StripsLeadingDot pins the single-source-of-
+// truth method every label-derivation site now calls. A dotfile-rooted
+// volume path (/home/devm/.codex) MUST derive "codex", not ".codex" —
+// mutagen rejects ".codex" as an invalid session name, and the
+// Mac-side mirror would land at a hidden dir the operator can't see.
+// A drift-copy of this logic in v0.23.3's reconcile package used raw
+// filepath.Base and shipped a mis-mirrored .codex volume before
+// erroring; this test locks the canonical path.
+func TestVolumeResolveLabel_StripsLeadingDot(t *testing.T) {
+	cases := []struct {
+		name string
+		v    Volume
+		want string
+	}{
+		{"dotfile leaf", Volume{Path: "/home/devm/.codex"}, "codex"},
+		{"plain leaf", Volume{Path: "/home/devm/data"}, "data"},
+		{"explicit label overrides", Volume{Path: "/home/devm/.claude", Label: strPtr("override")}, "override"},
+		{"explicit label may keep dot", Volume{Path: "/x", Label: strPtr(".weird")}, ".weird"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, tc.v.ResolveLabel())
+		})
+	}
+}
+
+// ---------- validateLabels: mutagen-name rejection ----------
+
+func TestValidateLabels_RejectsInvalidExplicit(t *testing.T) {
+	c := Config{Volumes: map[string]Volume{
+		"claude": {Path: "/home/devm/claude", Label: strPtr(".claude")},
+	}}
+	err := c.validateLabels("")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "volumes.claude")
+	assert.Contains(t, err.Error(), `label ".claude"`)
+	assert.Contains(t, err.Error(), "not a valid mutagen session name")
+}
+
+func TestValidateLabels_RejectsInvalidDerivedAndAdvisesLabel(t *testing.T) {
+	// /home/devm/foo.bar → derived leaf "foo.bar" (leading-dot strip doesn't
+	// help interior dots) → validate rejects and tells the user to add an
+	// explicit label.
+	c := Config{Volumes: map[string]Volume{
+		"stuff": {Path: "/home/devm/foo.bar"},
+	}}
+	err := c.validateLabels("")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "volumes.stuff")
+	assert.Contains(t, err.Error(), `derived label "foo.bar"`)
+	assert.Contains(t, err.Error(), "add an explicit `label:`")
+}
+
+func TestValidateLabels_DotClaudePathSanitizesToValid(t *testing.T) {
+	// The exact shelfmates + tool/ai/claude pattern: /home/devm/.claude
+	// derives leaf ".claude", which sanitizes to "claude" — a valid
+	// mutagen name. No error.
+	c := Config{Volumes: map[string]Volume{
+		"claude": {Path: "/home/devm/.claude"},
+	}}
+	assert.NoError(t, c.validateLabels(""))
+}
+
+// ---------- validateProjectIDReserved ----------
+
+func TestValidateProjectID_ReservedNames(t *testing.T) {
+	reserved := []string{"bin", "state", "iron-proxy", "mutagen", "ssh", "secrets", "ca", "softnet-bin", "volumes"}
+	for _, name := range reserved {
+		t.Run(name, func(t *testing.T) {
+			c := Config{Project: Project{Name: name}}
+			err := c.validateProjectIDReserved()
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), name)
+		})
+	}
+
+	unrelated := []string{"shelfmates", "buzztrack", "my-app"}
+	for _, name := range unrelated {
+		t.Run(name, func(t *testing.T) {
+			c := Config{Project: Project{Name: name}}
+			assert.NoError(t, c.validateProjectIDReserved())
+		})
+	}
+}
+
+// ---------- BareCloneName ----------
+
+func TestBareCloneName(t *testing.T) {
+	assert.Equal(t, "foo", BareCloneName("git@github.com:me/foo.git"))
+	assert.Equal(t, "foo", BareCloneName("https://github.com/me/foo.git"))
+	assert.Equal(t, "foo", BareCloneName("https://github.com/me/foo"))
+}
+
+// ---------- Config.Validate + repos.<name>.commands ----------
+
+func TestConfigValidate_RepoCommands(t *testing.T) {
+	valid := Config{
+		Project:   Project{Name: "p"},
+		Functions: []string{"install", "test"},
+		Repos: map[string]RepoConfig{
+			"main": {
+				Secret:   "github",
+				Commands: []string{"install", "test"},
+			},
+		},
+	}
+	assert.NoError(t, valid.Validate())
+
+	invalid := Config{
+		Project:   Project{Name: "p"},
+		Functions: []string{"test"},
+		Repos: map[string]RepoConfig{
+			"main": {
+				Secret:   "github",
+				Commands: []string{"Install"},
+			},
+		},
+	}
+	err := invalid.Validate()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "function name")
+}
+
+// ---------- Config.Validate + function references ----------
+
+func TestValidate_RepoCommandsFunctionMustExist(t *testing.T) {
+	cfg := Config{
+		Project:   Project{Name: "p"},
+		Functions: []string{"defined-fn"},
+		Repos: map[string]RepoConfig{
+			"main": {Commands: []string{"defined-fn", "missing-fn"}},
+		},
+	}
+	err := cfg.Validate()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "missing-fn")
+	assert.Contains(t, err.Error(), "commands")
+}
+
+func TestValidate_ServiceExecFuncMustExist(t *testing.T) {
+	cfg := Config{
+		Project:   Project{Name: "p"},
+		Functions: []string{"declared-svc"},
+		Services: OrderedMapOf(map[string]Service{
+			"worker": {ExecFunc: "declared-svc"},
+			"orphan": {ExecFunc: "not-in-devm-sh"},
+		}),
+	}
+	err := cfg.Validate()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "not-in-devm-sh")
+	assert.Contains(t, err.Error(), "exec")
+}
+
+func TestValidate_ServiceExecArgv_NeverChecksAgainstFunctions(t *testing.T) {
+	// Argv-form exec is a literal command, not a devm.sh function
+	// reference — it must never be checked against Functions.
+	cfg := Config{
+		Project: Project{Name: "p"},
+		Services: OrderedMapOf(map[string]Service{
+			"worker": {ExecArgv: []string{"/usr/bin/redis-server"}},
+		}),
+	}
+	assert.NoError(t, cfg.Validate())
+}
+
+func TestValidateMacServices_Shape(t *testing.T) {
+	cases := []struct {
+		name    string
+		in      []*MacService
+		wantErr string // substring; "" means success
+	}{
+		{"empty_ok", nil, ""},
+		{"happy", []*MacService{{Name: "studio", Port: 3000}}, ""},
+		{"two_distinct", []*MacService{{Name: "a", Port: 3000}, {Name: "b", Port: 4000}}, ""},
+		{"bad_name_uppercase", []*MacService{{Name: "Studio", Port: 3000}}, "mac_services[0].name"},
+		{"bad_name_dot", []*MacService{{Name: "api.v2", Port: 3000}}, "mac_services[0].name"},
+		{"bad_name_too_long", []*MacService{{Name: strings.Repeat("a", 64), Port: 3000}}, "mac_services[0].name"},
+		{"port_reserved_80", []*MacService{{Name: "a", Port: 80}}, "reserved"},
+		{"port_reserved_443", []*MacService{{Name: "a", Port: 443}}, "reserved"},
+		{"port_reserved_53", []*MacService{{Name: "a", Port: 53}}, "reserved"},
+		{"port_reserved_123", []*MacService{{Name: "a", Port: 123}}, "reserved"},
+		{"port_zero", []*MacService{{Name: "a", Port: 0}}, "port"},
+		{"port_too_high", []*MacService{{Name: "a", Port: 70000}}, "port"},
+		{"dup_name", []*MacService{{Name: "a", Port: 3000}, {Name: "a", Port: 4000}}, "duplicate"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			c := Config{MacServices: tc.in}
+			err := c.validateMacServices()
+			if tc.wantErr == "" {
+				if err != nil {
+					t.Fatalf("want nil, got %v", err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+				t.Fatalf("want error containing %q, got %v", tc.wantErr, err)
+			}
+		})
+	}
+}
+
+func TestValidate_HostTest_Reserved(t *testing.T) {
+	c := Config{
+		Project: Project{Name: "p"},
+		Services: OrderedMapOf(map[string]Service{
+			"api": {Port: 3000, Hostname: "api.host.test"},
+		}),
+	}
+	if err := c.Validate(); err == nil || !strings.Contains(err.Error(), "host.test") {
+		t.Fatalf("want host.test reservation error, got %v", err)
+	}
+	// Bare "host.test" is rejected too.
+	c2 := Config{
+		Project: Project{Name: "p"},
+		Services: OrderedMapOf(map[string]Service{
+			"api": {Port: 3000, Hostname: "host.test"},
+		}),
+	}
+	if err := c2.Validate(); err == nil || !strings.Contains(err.Error(), "host.test") {
+		t.Fatalf("want host.test reservation error, got %v", err)
+	}
+}
+
+func TestValidatePeerServices_Shape(t *testing.T) {
+	cases := []struct {
+		name    string
+		in      []*PeerService
+		wantErr string
+	}{
+		{"empty_ok", nil, ""},
+		{"happy", []*PeerService{{Project: "sibling"}}, ""},
+		{"bad_name_uppercase", []*PeerService{{Project: "Sibling"}}, "peer_services[0].project"},
+		{"bad_name_empty", []*PeerService{{Project: ""}}, "peer_services[0].project"},
+		{"dup", []*PeerService{{Project: "a"}, {Project: "a"}}, "duplicate"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			c := Config{PeerServices: tc.in}
+			err := c.validatePeerServicesShape()
+			if tc.wantErr == "" {
+				if err != nil {
+					t.Fatalf("want nil, got %v", err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+				t.Fatalf("want %q, got %v", tc.wantErr, err)
+			}
+		})
+	}
+}

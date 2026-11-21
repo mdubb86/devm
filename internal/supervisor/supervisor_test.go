@@ -1,0 +1,468 @@
+package supervisor
+
+import (
+	"context"
+	"os"
+	"os/exec"
+	"strings"
+	"sync/atomic"
+	"syscall"
+	"testing"
+	"time"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+)
+
+func TestBackoff_StartsAtBase(t *testing.T) {
+	b := newBackoff(100*time.Millisecond, 1*time.Second)
+	start := time.Now()
+	b.onExit(context.Background(), 1)
+	elapsed := time.Since(start)
+	assert.Greater(t, elapsed, 80*time.Millisecond)
+	assert.Less(t, elapsed, 200*time.Millisecond)
+}
+
+func TestBackoff_DoublesOnRepeatedCrashes(t *testing.T) {
+	b := newBackoff(100*time.Millisecond, 1*time.Second)
+	b.onExit(context.Background(), 1) // sets delay = 100ms
+	start := time.Now()
+	b.onExit(context.Background(), 1) // would be 200ms now
+	elapsed := time.Since(start)
+	assert.Greater(t, elapsed, 180*time.Millisecond,
+		"second crash should double the delay")
+	assert.Less(t, elapsed, 300*time.Millisecond)
+}
+
+func TestBackoff_ResetsAfterStablePeriod(t *testing.T) {
+	b := newBackoff(50*time.Millisecond, 5*time.Second)
+	b.onExit(context.Background(), 1)
+	b.delay = 2 * time.Second                       // simulate already-elevated
+	b.lastStart = time.Now().Add(-31 * time.Second) // simulate stable >30s ago
+	start := time.Now()
+	b.onExit(context.Background(), 1) // should reset to base = 50ms
+	elapsed := time.Since(start)
+	assert.Less(t, elapsed, 150*time.Millisecond,
+		"stable period >30s should reset backoff to base")
+}
+
+func TestBackoff_RespectsCap(t *testing.T) {
+	b := newBackoff(100*time.Millisecond, 200*time.Millisecond)
+	b.onExit(context.Background(), 1) // 100ms
+	b.onExit(context.Background(), 1) // 200ms (cap)
+	start := time.Now()
+	b.onExit(context.Background(), 1) // would be 400ms but capped at 200ms
+	elapsed := time.Since(start)
+	assert.Less(t, elapsed, 300*time.Millisecond,
+		"delay must not exceed cap")
+}
+
+func TestKey_String(t *testing.T) {
+	assert.Equal(t, "acme/vm", Key{ProjectID: "acme", Role: RoleVM}.String())
+	assert.Equal(t, "acme/proxy", Key{ProjectID: "acme", Role: RoleProxy}.String())
+}
+
+func TestEnvMap_EmptyForwardsDaemonEnv(t *testing.T) {
+	// Contract: when cmd.Env is empty/nil, envMap forwards the
+	// daemon's own environment so spawned children inherit it.
+	// pexec builds the child's env solely from this map (no
+	// implicit parent inheritance), so returning nil here would
+	// give the child an empty environment — discovered in the
+	// 2026-06-27 smoke test when `tart run` was given no $HOME
+	// or $PATH and silently failed.
+	t.Setenv("DEVM_SUPERVISOR_TEST_MARKER", "present")
+	m := envMap(nil)
+	assert.Equal(t, "present", m["DEVM_SUPERVISOR_TEST_MARKER"],
+		"daemon env not forwarded when cmd.Env is nil")
+
+	m = envMap([]string{})
+	assert.Equal(t, "present", m["DEVM_SUPERVISOR_TEST_MARKER"],
+		"daemon env not forwarded when cmd.Env is empty")
+}
+
+func TestEnvMap_Parses(t *testing.T) {
+	m := envMap([]string{"FOO=bar", "BAZ=qux=quux"})
+	assert.Equal(t, "bar", m["FOO"])
+	assert.Equal(t, "qux=quux", m["BAZ"], "value with = should be preserved")
+}
+
+func TestArgsAfterPath_Empty(t *testing.T) {
+	assert.Nil(t, argsAfterPath(nil))
+	assert.Nil(t, argsAfterPath([]string{}))
+}
+
+func TestArgsAfterPath_StripsFirst(t *testing.T) {
+	result := argsAfterPath([]string{"/usr/bin/tart", "run", "--no-graphics", "myvm"})
+	assert.Equal(t, []string{"run", "--no-graphics", "myvm"}, result)
+}
+
+// TestSupervisor_SpawnActuallyRunsChild would have caught the
+// 2026-06-27 bug where pexec.ProcessManager.AddProcessFromConfig
+// silently registered children without starting them because
+// pm.started was false until Start() was called.
+func TestSupervisor_SpawnActuallyRunsChild(t *testing.T) {
+	tmp := t.TempDir()
+	marker := tmp + "/spawned"
+
+	s := New(tmp)
+	defer func() {
+		_ = s.pm.Stop()
+	}()
+
+	k := Key{ProjectID: "test", Role: RoleVM}
+	cmd := exec.Command("sh", "-c", "echo running > "+marker)
+	require.NoError(t, s.Spawn(context.Background(), k, cmd, nil))
+
+	// Poll briefly: the child should have run and written the marker.
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		if _, err := os.Stat(marker); err == nil {
+			return
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	t.Fatalf("child never ran; marker %s not created", marker)
+}
+
+// TestSupervisor_AdoptedStatusAndStop spawns a real long-running
+// child outside the supervisor's lifecycle, registers it via Adopt,
+// and verifies Status + Stop work the same as for managed entries.
+// This is the post-daemon-restart adoption path that lets us re-
+// attach to iron-proxy processes the prior daemon left running.
+func TestSupervisor_AdoptedStatusAndStop(t *testing.T) {
+	tmp := t.TempDir()
+	s := New(tmp)
+	defer func() { _ = s.pm.Stop() }()
+
+	// Start a sleep we can later SIGTERM. We do this *outside* the
+	// supervisor — that's the whole point of adoption.
+	cmd := exec.Command("sleep", "30")
+	require.NoError(t, cmd.Start())
+	pid := cmd.Process.Pid
+	exitCh := make(chan error, 1)
+	done := make(chan struct{})
+	go func() {
+		exitCh <- cmd.Wait()
+		close(done)
+	}()
+	defer func() {
+		select {
+		case <-done:
+		default:
+			_ = syscall.Kill(pid, syscall.SIGKILL)
+			<-done
+		}
+	}()
+
+	k := Key{ProjectID: "adopted-proj", Role: RoleProxy}
+
+	state := s.Status(k)
+	assert.False(t, state.Present, "unknown key should not be present pre-Adopt")
+
+	s.Adopt(k, pid)
+
+	state = s.Status(k)
+	assert.True(t, state.Present)
+	assert.True(t, state.Running)
+	assert.Equal(t, pid, state.PID)
+
+	require.NoError(t, s.Stop(context.Background(), k))
+
+	// After Stop returns, the adopted process must ALREADY be gone —
+	// not "will be gone soon." Regression: apply-iron-proxy immediately
+	// rebinds the process's ports; a not-yet-dead process holds them
+	// and rebind fails with EADDRINUSE. Verified by kill(pid, 0)
+	// returning ESRCH (no such process).
+	err := syscall.Kill(pid, 0)
+	assert.ErrorIs(t, err, syscall.ESRCH,
+		"expected pid %d to be gone by the time Stop returned, got err=%v", pid, err)
+
+	// Confirm SIGTERM landed: child exits and reports signal=SIGTERM.
+	select {
+	case err := <-exitCh:
+		var exitErr *exec.ExitError
+		require.ErrorAs(t, err, &exitErr)
+		ws := exitErr.Sys().(syscall.WaitStatus)
+		assert.True(t, ws.Signaled())
+		assert.Equal(t, syscall.SIGTERM, ws.Signal())
+	case <-time.After(3 * time.Second):
+		t.Fatal("adopted child did not exit after Stop")
+	}
+
+	state = s.Status(k)
+	assert.False(t, state.Present, "adopted entry should be reaped after Stop")
+}
+
+// TestSupervisor_AdoptedDeadPIDReaped verifies that Status detects
+// when an adopted process has died (e.g., crashed externally) and
+// reaps the entry instead of forever claiming it's running.
+func TestSupervisor_AdoptedDeadPIDReaped(t *testing.T) {
+	tmp := t.TempDir()
+	s := New(tmp)
+
+	// Spawn-and-wait so we have a definitely-reaped PID.
+	cmd := exec.Command("true")
+	require.NoError(t, cmd.Run())
+	deadPID := cmd.Process.Pid
+
+	k := Key{ProjectID: "ghost", Role: RoleProxy}
+	s.Adopt(k, deadPID)
+
+	state := s.Status(k)
+	assert.False(t, state.Present, "dead adopted PID should be reaped on Status probe")
+}
+
+// TestSupervisor_StopUnknownReturnsErrNotFound makes sure the
+// adopted-first path doesn't shadow the original error contract.
+func TestSupervisor_StopUnknownReturnsErrNotFound(t *testing.T) {
+	tmp := t.TempDir()
+	s := New(tmp)
+
+	err := s.Stop(context.Background(), Key{ProjectID: "nope", Role: RoleProxy})
+	assert.ErrorIs(t, err, ErrNotFound)
+}
+
+// TestDisableRestart_PreventsRespawnOnUnexpectedExit spawns a child
+// that records its start into a counter file then exits non-zero
+// shortly after — exactly the shape that would normally trigger
+// pexec's OnUnexpectedExit backoff-respawn. Calling DisableRestart
+// before the exit must prevent any respawn: the counter file should
+// still show exactly one start well after the process has exited and
+// the backoff's base delay (1s, per Spawn) has elapsed.
+func TestDisableRestart_PreventsRespawnOnUnexpectedExit(t *testing.T) {
+	tmp := t.TempDir()
+	counter := tmp + "/starts"
+
+	s := New(tmp)
+	defer func() { _ = s.pm.Stop() }()
+
+	k := Key{ProjectID: "flaky", Role: RoleVM}
+	cmd := exec.Command("sh", "-c", "echo start >> "+counter+"; sleep 0.3; exit 1")
+	require.NoError(t, s.Spawn(context.Background(), k, cmd, nil))
+
+	// Disable promptly, well before the child's 0.3s exit.
+	s.DisableRestart(k)
+
+	// Wait past both the child's exit and the backoff's base restart
+	// delay (1s) so a respawn, if the gate weren't wired up, would have
+	// had time to happen and record a second start.
+	time.Sleep(2 * time.Second)
+
+	b, err := os.ReadFile(counter)
+	require.NoError(t, err)
+	starts := strings.Count(string(b), "start")
+	assert.Equal(t, 1, starts, "DisableRestart'd process must not be respawned on unexpected exit")
+
+	// The entry is still registered (DisableRestart doesn't touch the
+	// registry) — Status should report it present but no longer running.
+	state := s.Status(k)
+	assert.True(t, state.Present, "DisableRestart must not remove the registry entry")
+	assert.False(t, state.Running, "process should have exited and not been respawned")
+}
+
+// TestSpawn_OnUnexpectedExitFiresOnCrash spawns a child that exits
+// non-zero on its own (a real crash) and asserts the onUnexpectedExit
+// hook passed to Spawn fires — the mechanism serviceapi's cache-write
+// callbacks (RoleVM/RoleProxy) depend on to learn a supervised process
+// died without waiting for the next watchdog tick.
+func TestSpawn_OnUnexpectedExitFiresOnCrash(t *testing.T) {
+	tmp := t.TempDir()
+	s := New(tmp)
+	defer func() { _ = s.pm.Stop() }()
+
+	var fired atomic.Bool
+	k := Key{ProjectID: "crashy", Role: RoleVM}
+	cmd := exec.Command("sh", "-c", "exit 1")
+	require.NoError(t, s.Spawn(context.Background(), k, cmd, func() { fired.Store(true) }))
+
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		if fired.Load() {
+			return
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	t.Fatal("onUnexpectedExit hook never fired after child crashed")
+}
+
+// TestSpawn_OnUnexpectedExitSkippedAfterDisableRestart confirms the
+// hook does NOT fire for an expected exit — DisableRestart is called
+// before the child exits, mirroring /vm/stop's graceful-poweroff path
+// in vm.go, which must not have its cache-write callback mistake a
+// clean shutdown for a crash.
+func TestSpawn_OnUnexpectedExitSkippedAfterDisableRestart(t *testing.T) {
+	tmp := t.TempDir()
+	s := New(tmp)
+	defer func() { _ = s.pm.Stop() }()
+
+	var fired atomic.Bool
+	k := Key{ProjectID: "graceful", Role: RoleVM}
+	cmd := exec.Command("sh", "-c", "sleep 0.3; exit 0")
+	require.NoError(t, s.Spawn(context.Background(), k, cmd, func() { fired.Store(true) }))
+
+	s.DisableRestart(k)
+
+	time.Sleep(1 * time.Second)
+	assert.False(t, fired.Load(), "onUnexpectedExit hook must not fire for a DisableRestart'd expected exit")
+}
+
+// TestDisableRestart_UnknownKey_Noop confirms DisableRestart is safe to
+// call on a key that was never Spawned — no panic, no effect.
+func TestDisableRestart_UnknownKey_Noop(t *testing.T) {
+	tmp := t.TempDir()
+	s := New(tmp)
+
+	assert.NotPanics(t, func() {
+		s.DisableRestart(Key{ProjectID: "nope", Role: RoleVM})
+	})
+}
+
+// TestSupervisor_ChildInheritsDaemonEnv would have caught the
+// 2026-06-27 bug where envMap(nil) returned nil → pexec gave the
+// child an empty env → `tart run` (and any other child) couldn't
+// find $HOME, $PATH, etc., and silently exited.
+func TestSupervisor_ChildInheritsDaemonEnv(t *testing.T) {
+	tmp := t.TempDir()
+	out := tmp + "/env-marker"
+
+	t.Setenv("DEVM_SPAWN_TEST_MARKER", "inherited")
+
+	s := New(tmp)
+	defer func() {
+		_ = s.pm.Stop()
+	}()
+
+	k := Key{ProjectID: "envtest", Role: RoleVM}
+	cmd := exec.Command("sh", "-c", "echo $DEVM_SPAWN_TEST_MARKER > "+out)
+	require.NoError(t, s.Spawn(context.Background(), k, cmd, nil))
+
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		if b, err := os.ReadFile(out); err == nil {
+			assert.Equal(t, "inherited", strings.TrimSpace(string(b)),
+				"child did not see daemon env var")
+			return
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	t.Fatalf("child never wrote env marker")
+}
+
+// TestSupervisor_AdoptedStop_SIGKILLEscalation pins the second half of
+// the adopted-Stop contract: a child that ignores SIGTERM must be
+// SIGKILL'd after the grace window. iron-proxy's tokio shutdown can
+// take up to 10s but this test uses `trap "" TERM` to hard-ignore so
+// the escalation path is what actually kills it.
+func TestSupervisor_AdoptedStop_SIGKILLEscalation(t *testing.T) {
+	tmp := t.TempDir()
+	s := New(tmp)
+	defer func() { _ = s.pm.Stop() }()
+
+	// sh -c 'trap "" TERM; touch <marker>; sleep 30' — child ignores
+	// SIGTERM, so only SIGKILL escalation can end it. The marker file
+	// is polled below before signaling: without it, SIGTERM can race
+	// the shell's own trap installation and kill the process before
+	// the trap takes effect, making the test flaky.
+	marker := tmp + "/trap-installed"
+	cmd := exec.Command("sh", "-c", `trap "" TERM; touch `+marker+`; sleep 30`)
+	require.NoError(t, cmd.Start())
+	pid := cmd.Process.Pid
+	exitCh := make(chan error, 1)
+	done := make(chan struct{})
+	go func() {
+		exitCh <- cmd.Wait()
+		close(done)
+	}()
+	defer func() {
+		select {
+		case <-done:
+		default:
+			_ = syscall.Kill(pid, syscall.SIGKILL)
+			<-done
+		}
+	}()
+
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		if _, err := os.Stat(marker); err == nil {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	require.FileExists(t, marker, "trap was never installed by the child")
+
+	k := Key{ProjectID: "ignores-sigterm", Role: RoleProxy}
+	s.Adopt(k, pid)
+
+	start := time.Now()
+	require.NoError(t, s.Stop(context.Background(), k))
+	elapsed := time.Since(start)
+
+	// Stop must have waited the full adoptedStopGrace before SIGKILL,
+	// so total elapsed is at least adoptedStopGrace. Upper bound is
+	// adoptedStopGrace + sigkillGrace + slack for scheduling.
+	assert.GreaterOrEqual(t, elapsed, adoptedStopGrace,
+		"Stop returned in %v, expected at least %v (grace not honored)", elapsed, adoptedStopGrace)
+	assert.Less(t, elapsed, adoptedStopGrace+sigkillGrace+2*time.Second,
+		"Stop took %v, expected at most %v (escalation not firing)", elapsed, adoptedStopGrace+sigkillGrace+2*time.Second)
+
+	// Process must be gone right after Stop returns.
+	err := syscall.Kill(pid, 0)
+	assert.ErrorIs(t, err, syscall.ESRCH,
+		"expected pid %d to be gone after SIGKILL escalation, got err=%v", pid, err)
+
+	// Confirm the child was killed by SIGKILL specifically.
+	select {
+	case err := <-exitCh:
+		var exitErr *exec.ExitError
+		require.ErrorAs(t, err, &exitErr)
+		ws := exitErr.Sys().(syscall.WaitStatus)
+		assert.True(t, ws.Signaled())
+		assert.Equal(t, syscall.SIGKILL, ws.Signal(),
+			"expected SIGKILL signal, got %v", ws.Signal())
+	case <-time.After(3 * time.Second):
+		t.Fatal("SIGKILL'd child did not reach exit within observation window")
+	}
+}
+
+// TestWaitProcessGone pins the helper's contract: returns true when
+// kill(pid, 0) sees ESRCH within the timeout; false when the process
+// outlives the timeout. Uses `true` (immediate exit) and `sleep`
+// (long-lived) as the two directions.
+func TestWaitProcessGone_ProcessAlreadyGone(t *testing.T) {
+	cmd := exec.Command("true")
+	require.NoError(t, cmd.Run()) // exits immediately, PID reaped
+	pid := cmd.Process.Pid
+
+	// Already gone — should return true almost instantly.
+	start := time.Now()
+	got := waitProcessGone(pid, 1*time.Second)
+	elapsed := time.Since(start)
+
+	assert.True(t, got, "waitProcessGone should return true for a reaped PID")
+	assert.Less(t, elapsed, 100*time.Millisecond, "should return fast, took %v", elapsed)
+}
+
+func TestWaitProcessGone_ProcessOutlivesTimeout(t *testing.T) {
+	cmd := exec.Command("sleep", "30")
+	require.NoError(t, cmd.Start())
+	pid := cmd.Process.Pid
+	defer func() {
+		_ = syscall.Kill(pid, syscall.SIGKILL)
+		_, _ = cmd.Process.Wait()
+	}()
+
+	// Sleep is alive; short timeout — should return false after ~200ms.
+	start := time.Now()
+	got := waitProcessGone(pid, 200*time.Millisecond)
+	elapsed := time.Since(start)
+
+	assert.False(t, got, "waitProcessGone should return false for a live PID that outlives the timeout")
+	assert.GreaterOrEqual(t, elapsed, 200*time.Millisecond, "should wait the full timeout, took %v", elapsed)
+	assert.Less(t, elapsed, 500*time.Millisecond, "should return promptly after timeout, took %v", elapsed)
+}
+
+func TestRoleMutagen_DistinctValue(t *testing.T) {
+	assert.Equal(t, Role("mutagen"), RoleMutagen)
+	assert.NotEqual(t, RoleProxy, RoleMutagen)
+}

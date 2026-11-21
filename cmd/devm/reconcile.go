@@ -1,0 +1,159 @@
+package main
+
+import (
+	"context"
+	"fmt"
+	"os"
+	"os/signal"
+	"time"
+
+	"github.com/mdubb86/devm/internal/config"
+	"github.com/mdubb86/devm/internal/identity"
+	"github.com/mdubb86/devm/internal/orchestrator"
+	"github.com/mdubb86/devm/internal/reconcile"
+	"github.com/mdubb86/devm/internal/sandbox/tart"
+	"github.com/mdubb86/devm/internal/schema"
+	"github.com/mdubb86/devm/internal/serviceapi"
+	"github.com/spf13/cobra"
+)
+
+var (
+	reconcileYes          bool
+	reconcileJSON         bool
+	reconcileSkipSnapshot bool
+)
+
+// runReconcileFn is the test seam for orchestrator.RunReconcile.
+// reconcile_test.go swaps it to return a canned ReconcileResult so the
+// recreate path can be driven without a live daemon.
+var runReconcileFn = orchestrator.RunReconcile
+
+// runShellFlowFn is the test seam for the cold-start flow invoked after
+// a recreate-required teardown completes. Swapped in reconcile_test.go
+// to short-circuit the start side of the recreate sequence.
+var runShellFlowFn = runShellFlow
+
+var reconcileCmd = &cobra.Command{
+	Use:   "reconcile",
+	Short: "Diff devm.yaml against the running sandbox's daemon-side state; apply live changes or prompt for recreate",
+	RunE: func(cmd *cobra.Command, args []string) error {
+		cmd.SilenceUsage = true
+		if err := requireDaemonInSync(cmd.Context()); err != nil {
+			return err
+		}
+		ident := cfg // capture package identity cfg before it's shadowed below
+		resolved, err := discoverProjectFn()
+		if err != nil {
+			return err
+		}
+		cfg, err := config.Load(resolved.MacCwd)
+		if err != nil {
+			return err
+		}
+		tr := tart.New()
+		rc, res, err := runReconcileFn(ident, cfg, tr, resolved.MacCwd, orchestrator.ReconcileOptions{})
+		if err != nil {
+			return err
+		}
+		if reconcileJSON {
+			fmt.Println(orchestrator.FormatReconcileJSON(res))
+		} else {
+			fmt.Print(orchestrator.FormatReconcileText(res))
+		}
+		if rc != 0 {
+			os.Exit(rc)
+		}
+
+		// Best-effort: re-push routes so a `direct` flip made by this
+		// reconcile is reflected in the daemon's DNS answer right away,
+		// instead of waiting for the next `devm start` auto-apply.
+		repushRoutes(ident, cfg)
+
+		if len(res.RecreateRequired) == 0 {
+			return nil
+		}
+
+		// Recreate-required path: decide whether to prompt, and on
+		// approval delegate to the same teardown + start helpers
+		// `devm teardown` / `devm start` already use directly.
+		ok, err := confirmDestructive("recreate required — proceed?", reconcileYes)
+		if err != nil {
+			return err
+		}
+		if !ok {
+			fmt.Fprintln(os.Stderr, "aborted")
+			os.Exit(1)
+		}
+
+		ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
+		defer cancel()
+
+		stopDeps := orchestrator.StopDeps{
+			Tart:             tr,
+			ServiceAPIClient: serviceapi.NewClient(ident),
+			Ident:            ident,
+			Cfg:              cfg,
+			SkipSnapshot:     reconcileSkipSnapshot,
+		}
+		mode := orchestrator.StopPreserve
+		if res.Flavor == reconcile.FlavorTeardownVM {
+			mode = orchestrator.StopDestroy
+		}
+		if _, err := runStopFn(ctx, stopDeps, cfg.Project.Name, mode); err != nil {
+			return fmt.Errorf("recreate (%s): %w", res.Flavor, err)
+		}
+
+		return runShellFlowFn(cmd, "true", nil)
+	},
+}
+
+func init() {
+	reconcileCmd.Flags().BoolVarP(&reconcileYes, "yes", "y", false, "Skip the recreate confirmation prompt")
+	reconcileCmd.Flags().BoolVar(&reconcileJSON, "json", false, "Emit JSON output")
+	reconcileCmd.Flags().BoolVar(&reconcileSkipSnapshot, "skip-snapshot", false, "skip lifecycle snapshots for this run")
+	rootCmd.AddCommand(reconcileCmd)
+}
+
+// repushRoutes best-effort re-registers the project's routes with the
+// daemon so reconcile-time direct/proxied changes reflect immediately
+// (DNS reads the routes table). Never returns an error — a stopped VM,
+// down daemon, or push failure is a silent/logged no-op.
+//
+// The daemon's route table REPLACES a project's whole route set on
+// apply, so repushing in the wrong mode would silently flip a project
+// off `devm route local` back onto the VM. repushRoutes reads the
+// project's existing routes first and repushes in that SAME mode
+// (all of a project's routes share one mode); with no existing routes
+// it falls back to ModeVM, matching the cold-start auto-apply default
+// in shell.go.
+//
+// buildRoutes(ModeVM) resolves the VM IP via tart and errors if the VM
+// isn't running — that's a normal skip (nothing live to update on a
+// stopped VM), not a failure. A down daemon or a push error must never
+// fail `devm reconcile` itself.
+//
+// ident is the daemon identity (prod vs. e2e); named "ident" rather
+// than "cfg" here because cfg is the caller's project schema.Config.
+func repushRoutes(ident identity.Config, cfg schema.Config) {
+	rctx, rcancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer rcancel()
+	c := serviceapi.NewClient(ident)
+	if !c.Available(rctx) {
+		return
+	}
+
+	mode := serviceapi.ModeVM
+	if existing, err := c.ListRoutes(rctx); err == nil {
+		if projectRoutes := existing[cfg.Project.Name]; len(projectRoutes) > 0 {
+			mode = projectRoutes[0].Mode
+		}
+	}
+
+	routes, err := buildRoutes(cfg, mode)
+	if err != nil {
+		return
+	}
+	if _, err := c.ApplyRoutes(rctx, cfg.Project.Name, routes); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: re-push routes after reconcile: %v\n", err)
+	}
+}

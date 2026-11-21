@@ -1,0 +1,133 @@
+package serviceapi
+
+import (
+	"fmt"
+	"net"
+	"sort"
+	"strconv"
+
+	"github.com/mdubb86/devm/internal/schema"
+	"github.com/mdubb86/devm/internal/softnet"
+)
+
+// computeExposeMap turns a project config into softnet's declarative
+// ingress map: one host listener on the project's IP per service that
+// declares hostname+port (direct: true services are exposed the same
+// way; the `direct:` flag only controls whether the daemon's built-in
+// ProxyServer HTTP-fronts the service, not whether it's exposed at all).
+// SSH is always exposed on :22 for every project. Sorted by guest port
+// for wire-stability.
+func computeExposeMap(cfg schema.Config, projectIP string) []softnet.ExposePort {
+	var ports []softnet.ExposePort
+	for _, svc := range cfg.Services.Entries {
+		if svc.Port == 0 || svc.Hostname == "" {
+			continue
+		}
+		ports = append(ports, softnet.ExposePort{
+			GuestPort: svc.Port,
+			BindIP:    projectIP,
+			HostPort:  svc.Port,
+		})
+	}
+	// SSH always exposed on :22 for every project.
+	ports = append(ports, softnet.ExposePort{
+		GuestPort: 22,
+		BindIP:    projectIP,
+		HostPort:  22,
+	})
+	// gdevm-serve's health endpoint is always exposed, same as SSH — the
+	// Mac daemon's reserved _devm.<project>.test route (see
+	// reservedHealthRoute) dials projectIP:gdevmServePort expecting
+	// softnet to forward it into the guest's loopback-bound `gdevm
+	// serve`; without this the route dials nothing on the Mac side.
+	ports = append(ports, softnet.ExposePort{
+		GuestPort: gdevmServePort,
+		BindIP:    projectIP,
+		HostPort:  gdevmServePort,
+	})
+	// The reserved preview.<project>.<tld> route dials
+	// projectIP:previewServePort, which is the same port as
+	// gdevmServePort (the preview file server is served by `gdevm
+	// serve`), so the entry above already forwards it; a second entry
+	// for the same guest port would be a duplicate.
+	// filestash is always exposed, same as gdevm-serve — the Mac
+	// daemon's reserved files.<project>.<tld> route (see
+	// reservedFilestashRoute) dials projectIP:filestashServePort
+	// expecting softnet to forward it into the guest's bundled
+	// filestash service; without this the route dials nothing on the
+	// Mac side.
+	ports = append(ports, softnet.ExposePort{
+		GuestPort: filestashServePort,
+		BindIP:    projectIP,
+		HostPort:  filestashServePort,
+	})
+	sort.Slice(ports, func(i, j int) bool { return ports[i].GuestPort < ports[j].GuestPort })
+	return ports
+}
+
+// computeDirectTestHosts lists the hostnames softnet's .test DNS must answer
+// with loopback: services declaring both direct and a hostname. Sorted so
+// pushes are deterministic. Derived from the same cfg as computeExposeMap
+// and pushed at the same lifecycle points — direct add/remove is a live
+// change.
+func computeDirectTestHosts(cfg schema.Config) []string {
+	var hosts []string
+	for _, svc := range cfg.Services.Entries {
+		if svc.Direct && svc.Hostname != "" {
+			hosts = append(hosts, svc.Hostname)
+		}
+	}
+	sort.Strings(hosts)
+	return hosts
+}
+
+// pushTestHosts sends the direct-host set to a project's softnet control
+// socket. Same registration contract as pushExposeMap: an empty softnetState
+// entry means a lifecycle registration step was skipped — fail loud.
+func pushTestHosts(projectID string, hosts []string) error {
+	sock, ok := softnetState.get(projectID)
+	if !ok {
+		return fmt.Errorf("no softnet control socket registered for %q", projectID)
+	}
+	return newSoftnetClient(sock).setTestHosts(hosts)
+}
+
+// pushExposeMap sends the full expose map to a project's softnet control
+// socket. It first reconciles the project's host-port claims against
+// every other running project's — a conflict (another project already
+// owns one of these bindIP:hostPort endpoints) is returned without
+// dispatching to softnet, so the colliding listener is never bound and
+// the misrouting `.test` DNS answer (which resolves every name to
+// loopback) never happens. The claim reconcile runs even when the
+// project has no softnet socket yet, so claims track intent before the
+// socket exists. Ingress is independent of egress policy, so this is
+// safe to call in any egress state.
+//
+// Fail-loud contract: every caller of this function is expected to run
+// on a path where /vm/start, /vm/apply-iron-proxy (adopt-in-place), or
+// discoverSoftnet (daemon-restart rehydration) has already registered
+// this project's softnet control socket. An empty softnetState here
+// means one of those registration steps was skipped — historically a
+// silent no-op ("VM not started, ingress will be re-pushed at the next
+// /vm/start"), which hid the exact adopt-in-place gap this comment now
+// warns about: pushExposeMap returning nil made it look like ingress
+// had been reconciled when nothing was ever dispatched. Return an
+// error instead so a missing registration surfaces immediately rather
+// than as a silently-unreachable service.
+func pushExposeMap(projectID string, ports []softnet.ExposePort) error {
+	keys := make([]string, 0, len(ports))
+	for _, p := range ports {
+		keys = append(keys, net.JoinHostPort(p.BindIP, strconv.Itoa(p.HostPort)))
+	}
+	if err := exposeClaims.reconcile(projectID, keys); err != nil {
+		return err
+	}
+	sock, ok := softnetState.get(projectID)
+	if !ok {
+		return fmt.Errorf("push expose map for %s: softnet control socket not registered — /vm/start (or /vm/apply-iron-proxy for adopt-in-place) must be called first", projectID)
+	}
+	if err := newSoftnetClient(sock).setExposeMap(ports); err != nil {
+		return fmt.Errorf("push expose map for %s: %w", projectID, err)
+	}
+	return nil
+}

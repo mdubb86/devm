@@ -1,0 +1,335 @@
+#!/bin/sh
+set -e
+ln -sfn /opt/devm/scripts/with-devm-env /usr/local/bin/with-devm-env
+chmod 0755 /opt/devm/scripts/*.sh
+
+# --- one-time cleanup of legacy /opt/devm/.env (v0.9.10 consolidated to /etc/environment). ---
+rm -f /opt/devm/.env
+
+# --- CA install: trust devm's CA so guest processes accept iron-proxy's re-signed certs. ---
+if [ -f /opt/devm/ca/devm.crt ] && ! cmp -s /opt/devm/ca/devm.crt /usr/local/share/ca-certificates/devm.crt; then
+    install -o root -g root -m 0644 \
+        /opt/devm/ca/devm.crt \
+        /usr/local/share/ca-certificates/devm.crt
+    update-ca-certificates --fresh > /dev/null
+    grep -F -q -f /usr/local/share/ca-certificates/devm.crt \
+        /etc/ssl/certs/ca-certificates.crt || {
+        echo "FAIL: devm CA installed to CApath but not merged into ca-certificates.crt bundle" >&2
+        exit 1
+    }
+
+    # --- NSS trust: seed the devm user's per-user NSS db so browsers
+    # accept the CA too. Chromium (both Debian's chromium package and
+    # Playwright's Chrome-for-Testing) reads $HOME/.pki/nssdb and does
+    # NOT fall through to /etc/pki/nssdb when the per-user db exists
+    # but lacks the cert — verified by A/B on the same binary. So the
+    # per-user db is the one that matters; system NSS is unused by
+    # anything in a devm guest today.
+    #
+    # $HOME dies on teardown, so this re-seeds on every fresh cold-
+    # start alongside the CA install above. Between stop/start the
+    # ext4 $HOME persists, and the outer cmp -s guard skips re-seeding
+    # when the CA hasn't changed.
+    #
+    # `su - devm -c` runs certutil in the devm user's context so
+    # $HOME resolves to /home/devm and file ownership lands right.
+    # certutil ships in libnss3-tools, installed in the base image.
+    # -D-then-A tolerates CA rotation.
+    su - devm -c '
+        set -e
+        mkdir -p "$HOME/.pki/nssdb"
+        chmod 700 "$HOME/.pki" "$HOME/.pki/nssdb"
+        certutil -D -n devm -d sql:"$HOME/.pki/nssdb" 2>/dev/null || true
+        certutil -A -n devm -t "C,," \
+            -i /usr/local/share/ca-certificates/devm.crt \
+            -d sql:"$HOME/.pki/nssdb"
+    '
+fi
+
+# --- Firefox trust: enterprise-policy drop-in that loads p11-kit-trust
+# as a PKCS#11 SecurityDevice. NSS then reads the system CA store
+# (which the /etc/ssl/certs merge above just seeded with devm's CA)
+# transparently, so Firefox — and Firefox-derived browsers whose
+# install-dir distribution/policies.json symlinks here — accept
+# iron-proxy's re-signed certs without per-profile certutil work.
+# Firefox on Linux has no `ImportEnterpriseRoots` (Windows/macOS only)
+# and reads NEITHER /etc/ssl/certs NOR $HOME/.pki/nssdb on its own.
+#
+# Path is arch-specific: p11-kit-modules installs the module under
+# /usr/lib/$multiarch/pkcs11/. devm's base image is aarch64-only
+# (macOS/M-series host constraint); revisit when we support x86_64.
+install -o root -g root -d -m 0755 /etc/firefox/policies
+install -o root -g root -m 0644 /dev/stdin /etc/firefox/policies/policies.json <<'JSON'
+{"policies":{"SecurityDevices":{"P11-kit Trust":"/usr/lib/aarch64-linux-gnu/pkcs11/p11-kit-trust.so"}}}
+JSON
+
+# --- dnsmasq drop-in: devm-test.conf configures local resolver behavior. ---
+if [ -f /opt/devm/dnsmasq/devm-test.conf ] && ! cmp -s /opt/devm/dnsmasq/devm-test.conf /etc/dnsmasq.d/devm-test.conf; then
+    install -o root -g root -m 0644 \
+        /opt/devm/dnsmasq/devm-test.conf \
+        /etc/dnsmasq.d/devm-test.conf
+fi
+
+# --- machine-wide env (pam_env source for ssh sessions + systemd) ---
+if [ -f /opt/devm/etc/environment ] && ! cmp -s /opt/devm/etc/environment /etc/environment; then
+    install -o root -g root -m 0644 \
+        /opt/devm/etc/environment \
+        /etc/environment
+fi
+
+# --- sizing directives: swap + buildCache (always written; the guest
+# setup scripts own whether the directive is acted on). ---
+if [ -f /opt/devm/sizing/conf ] && ! cmp -s /opt/devm/sizing/conf /etc/devm/sizing.conf 2>/dev/null; then
+    install -d -m 0755 /etc/devm
+    install -m 0644 /opt/devm/sizing/conf /etc/devm/sizing.conf
+    # Same-boot apply: by the time install.sh runs (via tart exec,
+    # after multi-user is up) devm-swap.service is already active with
+    # the previous directive (base image enables it and orders it
+    # Before=multi-user.target), and devm-buildkit-cache.service is
+    # likewise active on a docker-enabled guest (InstallScript() enables
+    # --now at install time). `try-restart` re-runs both against the
+    # newly-dropped file so the new sizes take effect in this same
+    # boot. On a `docker.enabled:false` guest the cache service doesn't
+    # exist and try-restart silently skips it. `|| true` keeps a non-
+    # zero (e.g. unit masked) from failing install.sh.
+    systemctl try-restart devm-swap.service devm-buildkit-cache.service || true
+fi
+
+# --- login-shell PATH restorer: sourced by /etc/profile at bash -l ---
+if [ -f /opt/devm/profile.d/devm.sh ] && ! cmp -s /opt/devm/profile.d/devm.sh /etc/profile.d/devm.sh; then
+    install -o root -g root -m 0644 \
+        /opt/devm/profile.d/devm.sh \
+        /etc/profile.d/devm.sh
+fi
+
+# --- systemd unit files: one per user-declared service with Exec or Systemd,
+# plus devm's own gdevm-serve.service (shipped unconditionally, below). ---
+if [ -d /opt/devm/systemd ]; then
+    for f in /opt/devm/systemd/*.service; do
+        [ -e "$f" ] || continue
+        dest="/etc/systemd/system/$(basename "$f")"
+        if ! cmp -s "$f" "$dest"; then
+            install -o root -g root -m 0644 "$f" "$dest"
+        fi
+    done
+    # Snapshot timer units ride alongside the .service loop above —
+    # the pair is installed together so enabling the timer below has
+    # both pieces in place.
+    for f in /opt/devm/systemd/devm-snapshot-*.timer; do
+        [ -e "$f" ] || continue
+        dest="/etc/systemd/system/$(basename "$f")"
+        if ! cmp -s "$f" "$dest"; then
+            install -o root -g root -m 0644 "$f" "$dest"
+        fi
+    done
+    # Cron timers are installed but never enabled; the .service files
+    # are covered by the loop above.
+    for f in /opt/devm/systemd/devm-cron-*.timer; do
+        [ -e "$f" ] || continue
+        dest="/etc/systemd/system/$(basename "$f")"
+        if ! cmp -s "$f" "$dest"; then
+            install -o root -g root -m 0644 "$f" "$dest"
+        fi
+    done
+fi
+
+# --- Snapshot timers: enable every declared one, disable+remove any
+# whose devm.yaml entry has gone away since the last boot. The
+# manifest is a newline-delimited list of entry names written by
+# devmbundle.Build, always present (empty when none are declared). ---
+manifest=$(cat /opt/devm/snapshots/manifest)
+for installed in /etc/systemd/system/devm-snapshot-*.timer; do
+    [ -e "$installed" ] || continue
+    name=$(basename "$installed" .timer)
+    name=${name#devm-snapshot-}
+    if ! printf '%s\n' "$manifest" | grep -Fxq "$name"; then
+        systemctl disable --now devm-snapshot-"$name".timer
+        # The bundle is extracted over /opt/devm without clearing, so the
+        # staged copies must go too or the next run reinstalls them.
+        rm -f "/etc/systemd/system/devm-snapshot-$name.timer" \
+              "/etc/systemd/system/devm-snapshot-$name.service" \
+              "/opt/devm/systemd/devm-snapshot-$name.timer" \
+              "/opt/devm/systemd/devm-snapshot-$name.service"
+    fi
+done
+systemctl daemon-reload
+if [ -n "$manifest" ]; then
+    printf '%s\n' "$manifest" | while IFS= read -r name; do
+        [ -n "$name" ] || continue
+        systemctl enable --now devm-snapshot-"$name".timer
+    done
+fi
+
+# --- Cron timers: remove any whose devm.yaml entry has gone away (unit
+# files and wrapper), then start the declared ones only on an enforced
+# VM. The manifest is the sorted list of cron function names written by
+# devmbundle.Build (empty when none are declared). ---
+cron_manifest=$(cat /opt/devm/cron/manifest)
+# Walk .service files too so a service left without its timer is also
+# removed.
+for installed in /etc/systemd/system/devm-cron-*.timer /etc/systemd/system/devm-cron-*.service; do
+    [ -e "$installed" ] || continue
+    name=$(basename "$installed")
+    name=${name#devm-cron-}
+    name=${name%.timer}
+    name=${name%.service}
+    if ! printf '%s\n' "$cron_manifest" | grep -Fxq "$name"; then
+        # Stopping a unit whose file is absent fails, so stop only the
+        # ones present.
+        for unit in timer service; do
+            if [ -e "/etc/systemd/system/devm-cron-$name.$unit" ]; then
+                systemctl stop devm-cron-"$name"."$unit"
+            fi
+        done
+        rm -f "/etc/systemd/system/devm-cron-$name.timer" \
+              "/etc/systemd/system/devm-cron-$name.service" \
+              "/opt/devm/systemd/devm-cron-$name.timer" \
+              "/opt/devm/systemd/devm-cron-$name.service" \
+              "/opt/devm/cron-wrappers/$name.sh"
+    fi
+done
+systemctl daemon-reload
+# Timers are never enabled: at boot this script runs before egress is
+# enforced, and a later enforced step starts them. devm.target active
+# means that step already ran (a live reconcile), so it is safe to
+# (re)start them here — restart also picks up a changed schedule.
+if systemctl is-active --quiet devm.target; then
+    if [ -n "$cron_manifest" ]; then
+        printf '%s\n' "$cron_manifest" | while IFS= read -r name; do
+            [ -n "$name" ] || continue
+            systemctl restart devm-cron-"$name".timer
+        done
+    fi
+fi
+
+# --- SSH material (bundle-carried) ---
+if [ -f /opt/devm/ssh/ssh_host_ed25519_key ]; then
+    install -d -o devm -g devm -m 0700 /home/devm/.ssh
+    if ! cmp -s /opt/devm/ssh/authorized_keys /home/devm/.ssh/authorized_keys; then
+        install -o devm -g devm -m 0600 \
+            /opt/devm/ssh/authorized_keys \
+            /home/devm/.ssh/authorized_keys
+    fi
+    if ! cmp -s /opt/devm/ssh/ssh_host_ed25519_key /etc/ssh/ssh_host_ed25519_key; then
+        install -o root -g root -m 0600 \
+            /opt/devm/ssh/ssh_host_ed25519_key \
+            /etc/ssh/ssh_host_ed25519_key
+    fi
+    if ! cmp -s /opt/devm/ssh/ssh_host_ed25519_key.pub /etc/ssh/ssh_host_ed25519_key.pub; then
+        install -o root -g root -m 0644 \
+            /opt/devm/ssh/ssh_host_ed25519_key.pub \
+            /etc/ssh/ssh_host_ed25519_key.pub
+    fi
+    systemctl unmask ssh
+fi
+
+# --- client-SSH material (bundle-carried, ssh: feature) ---
+if [ -f /opt/devm/ssh-client/config ]; then
+    install -d -o devm -g devm -m 0700 /home/devm/.ssh
+    install -m 0600 -o devm -g devm /opt/devm/ssh-client/config /home/devm/.ssh/config
+    install -m 0600 -o devm -g devm /opt/devm/ssh-client/devm-jump-id /home/devm/.ssh/devm-jump-id
+    # known_hosts: append-write bundle entries while keeping any existing
+    # lines (e.g. localhost pin from the inbound-SSH section above).
+    touch /home/devm/.ssh/known_hosts
+    chown devm:devm /home/devm/.ssh/known_hosts
+    chmod 0600 /home/devm/.ssh/known_hosts
+    # Dedupe by host key prefix (field 1,3) so a re-run doesn't duplicate.
+    cat /home/devm/.ssh/known_hosts /opt/devm/ssh-client/known_hosts \
+        | awk '!seen[$1" "$3]++' \
+        > /home/devm/.ssh/known_hosts.new
+    mv /home/devm/.ssh/known_hosts.new /home/devm/.ssh/known_hosts
+    chown devm:devm /home/devm/.ssh/known_hosts
+    chmod 0600 /home/devm/.ssh/known_hosts
+
+    install -m 0644 /opt/devm/ssh-client/devm-ssh-agent-bridge.service /etc/systemd/system/
+    systemctl daemon-reload
+    systemctl enable --now devm-ssh-agent-bridge.service
+else
+    systemctl disable --now devm-ssh-agent-bridge.service 2>/dev/null || true
+    rm -f /etc/systemd/system/devm-ssh-agent-bridge.service
+    systemctl daemon-reload
+    rm -f /home/devm/.ssh/config /home/devm/.ssh/devm-jump-id
+fi
+
+# --- Docker shims: devm-runc-shim + docker CLI shim. Present only when Cfg.Docker.
+# Also the only place bin/gdevm lands at /usr/local/bin/gdevm, which is why the
+# gdevm-serve enable/restart block below must run after this loop, not before. ---
+if [ -d /opt/devm/bin ]; then
+    for f in /opt/devm/bin/*; do
+        [ -e "$f" ] || continue
+        dest="/usr/local/bin/$(basename "$f")"
+        if ! cmp -s "$f" "$dest"; then
+            install -o root -g root -m 0755 "$f" "$dest"
+        fi
+    done
+fi
+
+# --- gdevm-serve: enable at cold-start, restart on every re-run of this
+# script (bundle refresh / gdevm upgrade / reconcile) so it always runs
+# the binary that was just installed alongside it — a stale in-memory
+# gdevm-serve process would otherwise keep running the old binary
+# indefinitely, since restart isn't implied by the unit/binary file
+# just changing on disk. Unconditional: cheap, and the brief guest-side
+# blip this causes is a known, tolerated cost (see e2e coverage for the
+# watchdog probe window around a bundle refresh). Must run after the
+# /opt/devm/bin/* loop above, which is what lands the gdevm binary this
+# unit's ExecStart points at — on cold-start there is nothing at
+# /usr/local/bin/gdevm until that loop runs.
+if [ -f /etc/systemd/system/gdevm-serve.service ]; then
+    # systemd's LogsDirectory= directive only sets ownership when it
+    # creates the directory, so once /var/log/gdevm exists we have to
+    # chown it ourselves — the service runs as devm and cannot write
+    # state or logs into a directory it does not own.
+    install -d -o devm -g devm -m 0755 /var/log/gdevm
+    chown -R devm:devm /var/log/gdevm
+    systemctl daemon-reload
+    systemctl enable gdevm-serve.service
+    systemctl restart gdevm-serve.service
+fi
+
+# --- Filestash: bundled binary + passthrough config, dropped in fresh
+# on every cold-start/re-run (same rationale as gdevm-serve above). ---
+mkdir -p /home/devm/filestash/data/state/config
+# install's rename-after-write is required here, not a bare `> file`
+# redirect: a bundle refresh (devm reconcile) runs this script while
+# filestash.service may already be running, and overwriting a running
+# executable's inode in place fails with ETXTBSY. install writes to a
+# temp file in the same directory and renames it over the target.
+base64 -d <<'FILESTASH_B64' | install -o devm -g devm -m 0755 /dev/stdin /home/devm/filestash/filestash
+{{.FilestashBinaryB64}}
+FILESTASH_B64
+
+base64 -d <<'FILESTASH_CFG_B64' > /home/devm/filestash/data/state/config/config.json
+{{.FilestashConfigB64}}
+FILESTASH_CFG_B64
+chmod 600 /home/devm/filestash/data/state/config/config.json
+chown -R devm:devm /home/devm/filestash
+
+cat > /etc/systemd/system/filestash.service <<'FILESTASH_UNIT'
+{{.FilestashUnit}}
+FILESTASH_UNIT
+
+# --- Filestash is enabled here, and `try-restart` cycles it onto the
+# binary we just dropped IF the service is already running — i.e. on a
+# warm-boot bundle refresh. `try-restart` is a no-op on first boot
+# (service was never started), and ffmpeg shared libs (libavformat/
+# libavcodec/libavfilter/libavutil) are already installed on a warm boot
+# because the FirstBoot filestash-deps stage apt-installed them, so a
+# restart here needs no network. The initial start on first boot is done
+# by RenderProvisionUserScript's filestash-deps stage, once the open-
+# egress window is up and the libs are installed. ---
+systemctl daemon-reload
+systemctl enable filestash.service
+systemctl try-restart filestash.service
+
+# --- Mutagen agent pre-install (mutagen looks under ~/.mutagen/agents/<version>/mutagen-agent). ---
+if [ -f /opt/devm/bin/mutagen-agent ]; then
+    install -d -o devm -g devm -m 0755 /home/devm/.mutagen
+    install -d -o devm -g devm -m 0755 /home/devm/.mutagen/agents
+    install -d -o devm -g devm -m 0755 /home/devm/.mutagen/agents/{{.MutagenVersion}}
+    if ! cmp -s /opt/devm/bin/mutagen-agent /home/devm/.mutagen/agents/{{.MutagenVersion}}/mutagen-agent; then
+        install -o devm -g devm -m 0755 \
+            /opt/devm/bin/mutagen-agent \
+            /home/devm/.mutagen/agents/{{.MutagenVersion}}/mutagen-agent
+    fi
+fi

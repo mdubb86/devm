@@ -1,0 +1,677 @@
+package serviceapi
+
+import (
+	"bufio"
+	"bytes"
+	"context"
+	"crypto/tls"
+	"fmt"
+	"io"
+	"net"
+	"net/http"
+	"net/http/httptest"
+	"strconv"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
+	"github.com/mdubb86/devm/internal/identity"
+)
+
+// startGuestBackend spins up a tiny HTTP server returning body for
+// every GET, and returns its ephemeral port + a cleanup fn. The
+// server binds on 127.0.0.1 (httptest's default) so a guest-origin
+// listener dialing projectIP=127.0.0.1 lands here.
+func startGuestBackend(t *testing.T, body string) (int, func()) {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, body)
+	}))
+	url := strings.TrimPrefix(srv.URL, "http://")
+	_, portStr, err := net.SplitHostPort(url)
+	require.NoError(t, err)
+	port, err := strconv.Atoi(portStr)
+	require.NoError(t, err)
+	return port, srv.Close
+}
+
+// buildHairpinPair stands up a fresh ProxyServer + its guest-origin
+// HTTP and HTTPS listeners for projectID, with one route hostname
+// pointing at an in-process HTTP backend serving body. Returns the
+// ProxyServer, the HTTP port, the HTTPS port, and a cleanup fn.
+//
+// The route is registered under hostname = "api." + projectID + "." + cfg.TLD
+// so the SNI mux's own-project suffix match (`.<projectID>.<tld>`)
+// matches a tls.Dial with ServerName = that hostname, and the HTTP
+// mux's own-project Host-header path matches a plain HTTP GET with
+// the same Host.
+func buildHairpinPair(t *testing.T, cfg identity.Config, projectID, body string) (*ProxyServer, int, int, func()) {
+	t.Helper()
+	backendPort, backendClose := startGuestBackend(t, body)
+
+	routes := NewRoutes(cfg.TLD)
+	host := "api." + projectID + "." + cfg.TLD
+	require.NoError(t, routes.Apply(projectID, []Route{
+		{Hostname: host, BackendPort: backendPort, Mode: ModeVM, Project: projectID},
+	}))
+
+	caDir := t.TempDir()
+	ca, err := loadOrGenerateCAAt(cfg, caDir)
+	require.NoError(t, err)
+
+	proxy := NewProxyServer(cfg, routes, ca)
+
+	httpPort, httpsPort, err := proxy.StartGuestOriginListeners(context.Background(), projectID, "127.0.0.1")
+	require.NoError(t, err)
+
+	cleanup := func() {
+		proxy.StopProjectListeners(projectID)
+		backendClose()
+	}
+	return proxy, httpPort, httpsPort, cleanup
+}
+
+// TestPeerSuffix pins the hostname-suffix matcher under both the
+// one-label prod TLD ("test") and the two-label e2e TLD ("e2e.test").
+func TestPeerSuffix(t *testing.T) {
+	cases := []struct {
+		name string
+		sni  string
+		tld  string
+		want string
+	}{
+		{"peer_bare", "sibling.test", "test", "sibling.test"},
+		{"peer_one_label", "api.sibling.test", "test", "sibling.test"},
+		{"peer_nested", "app.sub.sibling.test", "test", "sibling.test"},
+		{"peer_e2e_bare", "sibling.e2e.test", "e2e.test", "sibling.e2e.test"},
+		{"peer_e2e_label", "api.sibling.e2e.test", "e2e.test", "sibling.e2e.test"},
+		{"peer_e2e_nested", "app.sub.sibling.e2e.test", "e2e.test", "sibling.e2e.test"},
+		{"wrong_tld", "api.sibling.example", "test", ""},
+		{"tld_only", "test", "test", ""},
+		{"empty_sni", "", "test", ""},
+		{"empty_tld", "api.sibling.test", "", ""},
+		{"e2e_in_prod_tld", "api.sibling.e2e.test", "test", "e2e.test"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := peerSuffix(tc.sni, tc.tld)
+			assert.Equal(t, tc.want, got)
+		})
+	}
+}
+
+// TestGuestOriginHTTPS_SNIMux_OwnDomainStillWorks pins that an SNI
+// matching this project's own `.<projectID>.<tld>` suffix flows
+// through the pre-existing TLS termination + guestOriginHandler path.
+// A GET over TLS must return the backend's body unchanged.
+func TestGuestOriginHTTPS_SNIMux_OwnDomainStillWorks(t *testing.T) {
+	cfg := identity.Prod
+	_, _, httpsPort, cleanup := buildHairpinPair(t, cfg, "projA", "bodyA")
+	defer cleanup()
+
+	sni := "api.projA." + cfg.TLD
+	addr := fmt.Sprintf("127.0.0.1:%d", httpsPort)
+	tc, err := tls.Dial("tcp", addr, &tls.Config{
+		ServerName:         sni,
+		InsecureSkipVerify: true,
+	})
+	require.NoError(t, err)
+	defer tc.Close()
+
+	req, err := http.NewRequest(http.MethodGet, "https://"+sni+"/", nil)
+	require.NoError(t, err)
+	req.Host = sni
+	require.NoError(t, req.Write(tc))
+
+	resp, err := http.ReadResponse(bufio.NewReader(tc), req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	body, err := io.ReadAll(resp.Body)
+	require.NoError(t, err)
+	assert.Equal(t, "bodyA", string(body))
+}
+
+// TestGuestOriginHTTPS_SNIMux_OutOfZoneOwnRoute pins the zone-
+// ownership addition: an SNI for a hostname the project registered
+// *outside* its own `.<projectID>.<tld>` namespace — a bare exact
+// like `links.wildprobe.test` under project "wildprobe", or a
+// wildcard match like `k3x9p2.pieces.test` under the project's
+// `*.pieces.test` — flows through the own-TLS termination path, same
+// as an in-zone SNI. Without this the hairpin would reject such an
+// SNI with an `unrecognized_name` alert and the operator would see
+// a declared hostname fail silently inside the VM.
+func TestGuestOriginHTTPS_SNIMux_OutOfZoneOwnRoute(t *testing.T) {
+	cfg := identity.Prod
+	backendPort, backendClose := startGuestBackend(t, "bodyWild")
+	defer backendClose()
+
+	routes := NewRoutes(cfg.TLD)
+	// Two out-of-zone routes: one bare exact, one wildcard.
+	require.NoError(t, routes.Apply("wildprobe", []Route{
+		{Hostname: "links.wildprobe.test", BackendPort: backendPort, Mode: ModeVM, Project: "wildprobe"},
+		{Hostname: "*.pieces.test", BackendPort: backendPort, Mode: ModeVM, Project: "wildprobe"},
+	}))
+
+	caDir := t.TempDir()
+	ca, err := loadOrGenerateCAAt(cfg, caDir)
+	require.NoError(t, err)
+
+	proxy := NewProxyServer(cfg, routes, ca)
+	_, httpsPort, err := proxy.StartGuestOriginListeners(context.Background(), "wildprobe", "127.0.0.1")
+	require.NoError(t, err)
+	defer proxy.StopProjectListeners("wildprobe")
+
+	cases := []struct {
+		name string
+		sni  string
+	}{
+		{"bare exact out-of-zone", "links.wildprobe.test"},
+		{"wildcard concrete match", "k3x9p2.pieces.test"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			addr := fmt.Sprintf("127.0.0.1:%d", httpsPort)
+			tc, err := tls.Dial("tcp", addr, &tls.Config{
+				ServerName:         c.sni,
+				InsecureSkipVerify: true,
+			})
+			require.NoError(t, err)
+			defer tc.Close()
+
+			req, err := http.NewRequest(http.MethodGet, "https://"+c.sni+"/", nil)
+			require.NoError(t, err)
+			req.Host = c.sni
+			require.NoError(t, req.Write(tc))
+
+			resp, err := http.ReadResponse(bufio.NewReader(tc), req)
+			require.NoError(t, err)
+			defer resp.Body.Close()
+			body, err := io.ReadAll(resp.Body)
+			require.NoError(t, err)
+			assert.Equal(t, "bodyWild", string(body),
+				"out-of-zone own-project SNI must terminate TLS locally and dispatch to the registered backend")
+		})
+	}
+}
+
+// TestGuestOriginHTTPS_SNIMux_PeerSplice stands up two hairpin pairs
+// A and B, declares them as peers of one another, then dials A with
+// SNI = api.projB.<tld>. A's SNI mux must splice the raw TCP to B's
+// listener, which then terminates TLS with its own cert and serves
+// B's backend body — proving neither TLS termination happened on A
+// nor cert minting leaked across the project boundary.
+func TestGuestOriginHTTPS_SNIMux_PeerSplice(t *testing.T) {
+	cfg := identity.Prod
+	proxyA, _, httpsPortA, cleanupA := buildHairpinPair(t, cfg, "projA", "bodyA")
+	defer cleanupA()
+	proxyB, _, httpsPortB, cleanupB := buildHairpinPair(t, cfg, "projB", "bodyB")
+	defer cleanupB()
+
+	peerBSuffix := "projB." + cfg.TLD
+	peerASuffix := "projA." + cfg.TLD
+	addrB := fmt.Sprintf("127.0.0.1:%d", httpsPortB)
+	addrA := fmt.Sprintf("127.0.0.1:%d", httpsPortA)
+
+	proxyA.SetPeerHairpinsForTest(func(string) map[string]string {
+		return map[string]string{peerBSuffix: addrB}
+	})
+	proxyB.SetPeerHairpinsForTest(func(string) map[string]string {
+		return map[string]string{peerASuffix: addrA}
+	})
+
+	// Client dials A but asks for B's hostname.
+	sni := "api." + peerBSuffix
+	tc, err := tls.Dial("tcp", addrA, &tls.Config{
+		ServerName:         sni,
+		InsecureSkipVerify: true,
+	})
+	require.NoError(t, err)
+	defer tc.Close()
+
+	// A spliced to B; B terminated TLS with its own cert for sni.
+	// The handshake succeeding at all is already evidence the splice
+	// worked (A has no cert for projB.<tld>; B does).
+	req, err := http.NewRequest(http.MethodGet, "https://"+sni+"/", nil)
+	require.NoError(t, err)
+	req.Host = sni
+	require.NoError(t, req.Write(tc))
+
+	resp, err := http.ReadResponse(bufio.NewReader(tc), req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	body, err := io.ReadAll(resp.Body)
+	require.NoError(t, err)
+	assert.Equal(t, "bodyB", string(body),
+		"peer splice must deliver B's body, not A's")
+}
+
+// minimalClientHello builds a hand-crafted TLS 1.2 ClientHello whose
+// only extension is server_name. Just enough on-wire bytes to drive
+// the mux's SNI peek. The cipher list is empty on purpose: parseSNI
+// doesn't care, and keeping lengths tight keeps the fixture small.
+func minimalClientHello(t *testing.T, sni string) []byte {
+	t.Helper()
+	n := len(sni)
+	require.LessOrEqual(t, n, 0xFFFF-5, "SNI too long for a minimal hello")
+	// server_name list entry: name_type(1) + name_len(2) + name(n)
+	// list: list_len(2) + entry
+	// extBody: list
+	// ext: ext_type(2) + ext_len(2) + extBody
+	// hello: version(2) + random(32) + sid_len(1) + ciphers_len(2) +
+	//        comp_len(1) + comp(0) + ext_total(2) + ext
+	// record: 4 (handshake header) + hello
+	extBodyLen := 2 + (1 + 2 + n) // list_len + entry
+	extLen := 4 + extBodyLen      // ext_type + ext_len + body
+	helloBodyLen := 2 + 32 + 1 + 2 + 1 + 2 + extLen
+	recordBodyLen := 4 + helloBodyLen
+
+	var b bytes.Buffer
+	// TLS record: handshake (0x16), legacy_version 0x0301, length.
+	b.WriteByte(0x16)
+	b.WriteByte(0x03)
+	b.WriteByte(0x01)
+	b.WriteByte(byte(recordBodyLen >> 8))
+	b.WriteByte(byte(recordBodyLen))
+	// Handshake header: ClientHello (0x01), 24-bit body length.
+	b.WriteByte(0x01)
+	b.WriteByte(byte(helloBodyLen >> 16))
+	b.WriteByte(byte(helloBodyLen >> 8))
+	b.WriteByte(byte(helloBodyLen))
+	// client_version TLS 1.2
+	b.WriteByte(0x03)
+	b.WriteByte(0x03)
+	// 32 bytes of random (all zeroes).
+	b.Write(make([]byte, 32))
+	// session_id_len = 0
+	b.WriteByte(0x00)
+	// cipher_suites len = 0
+	b.WriteByte(0x00)
+	b.WriteByte(0x00)
+	// compression_methods len = 0
+	b.WriteByte(0x00)
+	// extensions_len
+	b.WriteByte(byte(extLen >> 8))
+	b.WriteByte(byte(extLen))
+	// server_name extension: type 0x0000, body len.
+	b.WriteByte(0x00)
+	b.WriteByte(0x00)
+	b.WriteByte(byte(extBodyLen >> 8))
+	b.WriteByte(byte(extBodyLen))
+	// list_len
+	b.WriteByte(byte((1 + 2 + n) >> 8))
+	b.WriteByte(byte(1 + 2 + n))
+	// server_name entry
+	b.WriteByte(0x00) // host_name
+	b.WriteByte(byte(n >> 8))
+	b.WriteByte(byte(n))
+	b.WriteString(sni)
+	return b.Bytes()
+}
+
+// TestGuestOriginHTTPS_SNIMux_UnknownSNI_UnrecognizedNameAlert pins
+// the alert format on the wire: an unknown SNI yields exactly the
+// 7-byte RFC 6066 unrecognized_name warning record, then close.
+func TestGuestOriginHTTPS_SNIMux_UnknownSNI_UnrecognizedNameAlert(t *testing.T) {
+	cfg := identity.Prod
+	_, _, httpsPort, cleanup := buildHairpinPair(t, cfg, "projA", "bodyA")
+	defer cleanup()
+
+	addr := fmt.Sprintf("127.0.0.1:%d", httpsPort)
+	raw, err := net.Dial("tcp", addr)
+	require.NoError(t, err)
+	defer raw.Close()
+
+	// Craft a hand-rolled ClientHello with an SNI the server does not
+	// own and did not declare as a peer. The server must reply with
+	// the warn-level unrecognized_name alert.
+	hello := minimalClientHello(t, "foo.other.test")
+	_, err = raw.Write(hello)
+	require.NoError(t, err)
+
+	_ = raw.SetReadDeadline(time.Now().Add(3 * time.Second))
+	alert := make([]byte, 7)
+	_, err = io.ReadFull(raw, alert)
+	require.NoError(t, err)
+
+	want := []byte{0x15, 0x03, 0x03, 0x00, 0x02, 0x01, 0x70}
+	assert.Equal(t, want, alert,
+		"server must emit the 7-byte unrecognized_name alert record")
+}
+
+// TestGuestOriginHTTPS_SNIMux_PeekTimeout opens a TCP conn, writes
+// nothing, and asserts the server closes it inside the 5s peek
+// deadline (bounded between 4s and 7s to allow some slack) while
+// the listener keeps accepting new, well-formed connections.
+func TestGuestOriginHTTPS_SNIMux_PeekTimeout(t *testing.T) {
+	cfg := identity.Prod
+	_, _, httpsPort, cleanup := buildHairpinPair(t, cfg, "projA", "bodyA")
+	defer cleanup()
+
+	addr := fmt.Sprintf("127.0.0.1:%d", httpsPort)
+	stuck, err := net.Dial("tcp", addr)
+	require.NoError(t, err)
+	defer stuck.Close()
+
+	start := time.Now()
+	_, err = stuck.Read(make([]byte, 1))
+	elapsed := time.Since(start)
+	require.Error(t, err, "server must close the stalled conn after the peek deadline")
+	assert.GreaterOrEqual(t, elapsed, 4*time.Second,
+		"peek-timeout fired too early: %v", elapsed)
+	assert.LessOrEqual(t, elapsed, 7*time.Second,
+		"peek-timeout fired too late: %v", elapsed)
+
+	// The accept loop must still be live: a fresh, correctly-formed
+	// TLS dial on this project's own SNI succeeds.
+	sni := "api.projA." + cfg.TLD
+	tc, err := tls.Dial("tcp", addr, &tls.Config{
+		ServerName:         sni,
+		InsecureSkipVerify: true,
+	})
+	require.NoError(t, err,
+		"accept loop must not be blocked by a stalled peek")
+	tc.Close()
+}
+
+// TestGuestOriginHTTPS_SNIMux_PeerDies_SpliceDialFails_AlertNotHang
+// closes B's listener before A dials, points A's peer map at a dead
+// address, and asserts A's SNI mux sends the same unrecognized_name
+// alert on splice-dial failure (one failure mode, not two) and
+// returns within a bounded time rather than hanging.
+func TestGuestOriginHTTPS_SNIMux_PeerDies_SpliceDialFails_AlertNotHang(t *testing.T) {
+	cfg := identity.Prod
+	proxyA, _, httpsPortA, cleanupA := buildHairpinPair(t, cfg, "projA", "bodyA")
+	defer cleanupA()
+
+	// Bind an ephemeral port, record it, then close so a Dial to it
+	// yields a reliable connection-refused instead of relying on a
+	// known-dead address.
+	deadLn, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	deadAddr := deadLn.Addr().String()
+	require.NoError(t, deadLn.Close())
+
+	peerBSuffix := "projB." + cfg.TLD
+	proxyA.SetPeerHairpinsForTest(func(string) map[string]string {
+		return map[string]string{peerBSuffix: deadAddr}
+	})
+
+	addrA := fmt.Sprintf("127.0.0.1:%d", httpsPortA)
+	raw, err := net.Dial("tcp", addrA)
+	require.NoError(t, err)
+	defer raw.Close()
+
+	hello := minimalClientHello(t, "api."+peerBSuffix)
+	_, err = raw.Write(hello)
+	require.NoError(t, err)
+
+	start := time.Now()
+	_ = raw.SetReadDeadline(time.Now().Add(hairpinPeekTimeout + 2*time.Second))
+	alert := make([]byte, 7)
+	_, err = io.ReadFull(raw, alert)
+	elapsed := time.Since(start)
+	require.NoError(t, err, "server must emit an alert, not hang")
+	assert.Less(t, elapsed, hairpinPeekTimeout+2*time.Second,
+		"peer-dial-failed path must fail fast, not hang: %v", elapsed)
+
+	want := []byte{0x15, 0x03, 0x03, 0x00, 0x02, 0x01, 0x70}
+	assert.Equal(t, want, alert,
+		"splice-dial failure must surface the same alert as unknown SNI")
+}
+
+// TestGuestOriginHTTP_HostMux_OwnDomainStillWorks pins that a plain
+// HTTP request whose Host matches this project's own route resolves
+// through the pre-existing reverse-proxy path (serveOwn).
+func TestGuestOriginHTTP_HostMux_OwnDomainStillWorks(t *testing.T) {
+	cfg := identity.Prod
+	_, httpPort, _, cleanup := buildHairpinPair(t, cfg, "projA", "bodyA")
+	defer cleanup()
+
+	host := "api.projA." + cfg.TLD
+	url := fmt.Sprintf("http://127.0.0.1:%d/", httpPort)
+	req, err := http.NewRequest(http.MethodGet, url, nil)
+	require.NoError(t, err)
+	req.Host = host
+
+	resp, err := http.DefaultClient.Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	body, err := io.ReadAll(resp.Body)
+	require.NoError(t, err)
+	assert.Equal(t, http.StatusOK, resp.StatusCode)
+	assert.Equal(t, "bodyA", string(body),
+		"own-project Host must flow through the reverse-proxy path")
+}
+
+// TestGuestOriginHTTP_HostMux_PeerSplice stands up two hairpin pairs
+// A and B, declares them as HTTP peers of one another, then issues a
+// plain HTTP GET to A with Host = api.projB.<tld>. A's host mux must
+// hijack and splice to B's HTTP listener, which parses the replayed
+// request and serves B's backend body.
+func TestGuestOriginHTTP_HostMux_PeerSplice(t *testing.T) {
+	cfg := identity.Prod
+	proxyA, httpPortA, _, cleanupA := buildHairpinPair(t, cfg, "projA", "bodyA")
+	defer cleanupA()
+	proxyB, httpPortB, _, cleanupB := buildHairpinPair(t, cfg, "projB", "bodyB")
+	defer cleanupB()
+
+	peerBSuffix := "projB." + cfg.TLD
+	peerASuffix := "projA." + cfg.TLD
+	addrB := fmt.Sprintf("127.0.0.1:%d", httpPortB)
+	addrA := fmt.Sprintf("127.0.0.1:%d", httpPortA)
+
+	proxyA.SetPeerHairpinsHTTPForTest(func(string) map[string]string {
+		return map[string]string{peerBSuffix: addrB}
+	})
+	proxyB.SetPeerHairpinsHTTPForTest(func(string) map[string]string {
+		return map[string]string{peerASuffix: addrA}
+	})
+
+	// Client dials A but asks for B's hostname. The round-trip proves
+	// A hijacked, replayed the request to B, received B's response,
+	// and bridged the body back.
+	host := "api." + peerBSuffix
+	url := fmt.Sprintf("http://%s/", addrA)
+	req, err := http.NewRequest(http.MethodGet, url, nil)
+	require.NoError(t, err)
+	req.Host = host
+
+	resp, err := http.DefaultClient.Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	body, err := io.ReadAll(resp.Body)
+	require.NoError(t, err)
+	assert.Equal(t, http.StatusOK, resp.StatusCode)
+	assert.Equal(t, "bodyB", string(body),
+		"peer splice must deliver B's body, not A's")
+}
+
+// TestGuestOriginHTTP_HostMux_UnknownHost_421 pins the mux's reject
+// path: a Host that is neither own-project nor a declared peer must
+// return 421 Misdirected Request.
+func TestGuestOriginHTTP_HostMux_UnknownHost_421(t *testing.T) {
+	cfg := identity.Prod
+	_, httpPort, _, cleanup := buildHairpinPair(t, cfg, "projA", "bodyA")
+	defer cleanup()
+
+	url := fmt.Sprintf("http://127.0.0.1:%d/", httpPort)
+	req, err := http.NewRequest(http.MethodGet, url, nil)
+	require.NoError(t, err)
+	req.Host = "foo.other.test"
+
+	resp, err := http.DefaultClient.Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	assert.Equal(t, http.StatusMisdirectedRequest, resp.StatusCode,
+		"unknown host must surface as 421 Misdirected Request")
+}
+
+// TestGuestOriginHTTP_HostMux_EmptyPeerAddr_421 fires the `peer != ""`
+// guard in the dispatcher. A declared peer with an empty address
+// (vestigial map entry, misconfiguration) must fall through to the
+// unknown-host 421 path, not attempt a dial on "".
+func TestGuestOriginHTTP_HostMux_EmptyPeerAddr_421(t *testing.T) {
+	cfg := identity.Prod
+	proxyA, httpPortA, _, cleanupA := buildHairpinPair(t, cfg, "projA", "bodyA")
+	defer cleanupA()
+
+	peerBSuffix := "projB." + cfg.TLD
+	proxyA.SetPeerHairpinsHTTPForTest(func(string) map[string]string {
+		return map[string]string{peerBSuffix: ""}
+	})
+
+	url := fmt.Sprintf("http://127.0.0.1:%d/", httpPortA)
+	req, err := http.NewRequest(http.MethodGet, url, nil)
+	require.NoError(t, err)
+	req.Host = "api." + peerBSuffix
+
+	resp, err := http.DefaultClient.Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	assert.Equal(t, http.StatusMisdirectedRequest, resp.StatusCode,
+		"empty peer address must fall through to 421, not panic on dial")
+}
+
+// TestGuestOriginHTTP_HostMux_PeerDies_DialFailure_502 asserts that
+// a dial failure during the peer-splice path surfaces as 502 Bad
+// Gateway through the normal response path, not as a hijacked RST
+// with no diagnostic. The dial happens before the Hijack specifically
+// to make this possible.
+func TestGuestOriginHTTP_HostMux_PeerDies_DialFailure_502(t *testing.T) {
+	cfg := identity.Prod
+	proxyA, httpPortA, _, cleanupA := buildHairpinPair(t, cfg, "projA", "bodyA")
+	defer cleanupA()
+
+	// Bind + close an ephemeral port to get a reliable dead address
+	// (connection-refused on dial) rather than guessing one.
+	deadLn, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	deadAddr := deadLn.Addr().String()
+	require.NoError(t, deadLn.Close())
+
+	peerBSuffix := "projB." + cfg.TLD
+	proxyA.SetPeerHairpinsHTTPForTest(func(string) map[string]string {
+		return map[string]string{peerBSuffix: deadAddr}
+	})
+
+	url := fmt.Sprintf("http://127.0.0.1:%d/", httpPortA)
+	req, err := http.NewRequest(http.MethodGet, url, nil)
+	require.NoError(t, err)
+	req.Host = "api." + peerBSuffix
+
+	resp, err := http.DefaultClient.Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	assert.Equal(t, http.StatusBadGateway, resp.StatusCode,
+		"dead peer must surface as 502 Bad Gateway, not a hijacked RST")
+}
+
+// TestGuestOriginHTTP_HostMux_PeerSplice_POST proves the mux handles
+// request bodies correctly. The handler reads r.Body BEFORE Hijack
+// (per the http.Hijacker contract) and replays it to the peer via
+// r.Write — the old reverse of that order would misbehave on POST.
+// An echo backend on B returns whatever body it was sent, so a
+// successful round-trip of the payload is proof the body survived.
+func TestGuestOriginHTTP_HostMux_PeerSplice_POST(t *testing.T) {
+	cfg := identity.Prod
+
+	// Echo backend: respond with whatever body the request carried.
+	echoSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		_, _ = w.Write(b)
+	}))
+	defer echoSrv.Close()
+	_, portStr, err := net.SplitHostPort(strings.TrimPrefix(echoSrv.URL, "http://"))
+	require.NoError(t, err)
+	echoPort, err := strconv.Atoi(portStr)
+	require.NoError(t, err)
+
+	// Build B manually so its backend is the echo server, not the
+	// static-body fixture buildHairpinPair uses.
+	routesB := NewRoutes(cfg.TLD)
+	require.NoError(t, routesB.Apply("projB", []Route{
+		{Hostname: "api.projB." + cfg.TLD, BackendPort: echoPort, Mode: ModeVM, Project: "projB"},
+	}))
+	caDirB := t.TempDir()
+	caB, err := loadOrGenerateCAAt(cfg, caDirB)
+	require.NoError(t, err)
+	proxyB := NewProxyServer(cfg, routesB, caB)
+	httpPortB, _, err := proxyB.StartGuestOriginListeners(context.Background(), "projB", "127.0.0.1")
+	require.NoError(t, err)
+	defer proxyB.StopProjectListeners("projB")
+
+	proxyA, httpPortA, _, cleanupA := buildHairpinPair(t, cfg, "projA", "bodyA")
+	defer cleanupA()
+
+	peerBSuffix := "projB." + cfg.TLD
+	addrB := fmt.Sprintf("127.0.0.1:%d", httpPortB)
+	proxyA.SetPeerHairpinsHTTPForTest(func(string) map[string]string {
+		return map[string]string{peerBSuffix: addrB}
+	})
+
+	host := "api." + peerBSuffix
+	url := fmt.Sprintf("http://127.0.0.1:%d/", httpPortA)
+	payload := "hello-peer-splice-post"
+	req, err := http.NewRequest(http.MethodPost, url, strings.NewReader(payload))
+	require.NoError(t, err)
+	req.Host = host
+	req.ContentLength = int64(len(payload))
+
+	resp, err := http.DefaultClient.Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	body, err := io.ReadAll(resp.Body)
+	require.NoError(t, err)
+	assert.Equal(t, http.StatusOK, resp.StatusCode)
+	assert.Equal(t, payload, string(body),
+		"POST body must round-trip through the splice intact — "+
+			"proves body is captured BEFORE the Hijack")
+}
+
+// TestGuestOriginHTTP_HostMux_PeerSplice_ClosesConnection pins that
+// after a peer-splice response the client's TCP conn is closed. The
+// mux sets r.Close = true before replaying the request so the peer's
+// response carries Connection: close — without this a keep-alive
+// client would pin the conn to this one peer and 421 on any later
+// different-Host request.
+func TestGuestOriginHTTP_HostMux_PeerSplice_ClosesConnection(t *testing.T) {
+	cfg := identity.Prod
+	proxyA, httpPortA, _, cleanupA := buildHairpinPair(t, cfg, "projA", "bodyA")
+	defer cleanupA()
+	_, httpPortB, _, cleanupB := buildHairpinPair(t, cfg, "projB", "bodyB")
+	defer cleanupB()
+
+	peerBSuffix := "projB." + cfg.TLD
+	addrB := fmt.Sprintf("127.0.0.1:%d", httpPortB)
+	addrA := fmt.Sprintf("127.0.0.1:%d", httpPortA)
+	proxyA.SetPeerHairpinsHTTPForTest(func(string) map[string]string {
+		return map[string]string{peerBSuffix: addrB}
+	})
+
+	// Raw TCP so we own the conn and can prove the server closed it.
+	raw, err := net.Dial("tcp", addrA)
+	require.NoError(t, err)
+	defer raw.Close()
+
+	host := "api." + peerBSuffix
+	req, err := http.NewRequest(http.MethodGet, "http://"+addrA+"/", nil)
+	require.NoError(t, err)
+	req.Host = host
+	require.NoError(t, req.Write(raw))
+
+	resp, err := http.ReadResponse(bufio.NewReader(raw), req)
+	require.NoError(t, err)
+	_, _ = io.Copy(io.Discard, resp.Body)
+	resp.Body.Close()
+
+	// Next read must EOF — peer propagated Connection: close through
+	// the splice and tore down its side; the splice's half-close
+	// landed on our end.
+	_ = raw.SetReadDeadline(time.Now().Add(2 * time.Second))
+	_, err = raw.Read(make([]byte, 1))
+	assert.ErrorIs(t, err, io.EOF,
+		"peer-splice response must close the client's TCP conn (r.Close=true)")
+}

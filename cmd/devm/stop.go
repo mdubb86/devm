@@ -1,0 +1,77 @@
+package main
+
+import (
+	"context"
+	"os"
+	"os/signal"
+
+	"github.com/mdubb86/devm/internal/config"
+	"github.com/mdubb86/devm/internal/orchestrator"
+	"github.com/mdubb86/devm/internal/sandbox/tart"
+	"github.com/mdubb86/devm/internal/serviceapi"
+	"github.com/spf13/cobra"
+)
+
+// stopYesCompat is the deprecated --yes/-y flag: no-op, accepted so
+// scripts and muscle memory that still pass it don't break.
+var stopYesCompat bool
+
+// stopSkipSnapshot bypasses the on_stop lifecycle snapshot block for
+// one run. The escape hatch when a captures-failing stop must still
+// proceed (e.g. backup hook is temporarily broken but the operator
+// needs the VM down now).
+var stopSkipSnapshot bool
+
+var stopCmd = &cobra.Command{
+	Use:   "stop",
+	Short: "Stop the VM (preserves disk)",
+	Long: `Stops the project VM via the devm daemon supervisor. The VM
+filesystem and installed tools persist; only the running state is
+discarded. Re-launch with devm start.`,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		cmd.SilenceUsage = true
+		ident := cfg // capture package identity cfg before it's shadowed below
+		resolved, err := discoverProjectFn()
+		if err != nil {
+			return err
+		}
+		cfg, err := config.Load(resolved.MacCwd)
+		if err != nil {
+			return err
+		}
+		if _, err := daemonHandshake(cmd.Context(), ident, cfg); err != nil {
+			return err
+		}
+		ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
+		defer cancel()
+
+		deps := orchestrator.StopDeps{
+			Tart:             tart.New(),
+			ServiceAPIClient: serviceapi.NewClient(ident),
+			Ident:            ident,
+			Cfg:              cfg,
+			SkipSnapshot:     stopSkipSnapshot,
+		}
+		rc, err := runStopFn(ctx, deps, cfg.Project.Name, orchestrator.StopPreserve)
+		if err != nil {
+			return err
+		}
+		if rc != 0 {
+			os.Exit(rc)
+		}
+		return nil
+	},
+}
+
+// runStopFn is the test seam for orchestrator.RunStop. stop_test.go and
+// teardown_test.go swap it to capture the StopDeps the command built so
+// flag plumbing (e.g. --skip-snapshot) can be asserted without mounting
+// a real daemon.
+var runStopFn = orchestrator.RunStop
+
+func init() {
+	stopCmd.Flags().BoolVarP(&stopYesCompat, "yes", "y", false, "deprecated no-op; stop is always non-interactive")
+	_ = stopCmd.Flags().MarkHidden("yes")
+	stopCmd.Flags().BoolVar(&stopSkipSnapshot, "skip-snapshot", false, "skip lifecycle snapshots for this run")
+	rootCmd.AddCommand(stopCmd)
+}

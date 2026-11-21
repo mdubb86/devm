@@ -1,0 +1,91 @@
+package serviceapi
+
+import (
+	"context"
+
+	"github.com/mdubb86/devm/internal/daemonlog"
+	"github.com/mdubb86/devm/internal/identity"
+)
+
+// discoverSoftnet rehydrates softnetState after a daemon restart.
+// `tart run --net-softnet` setsid's the VM process (see
+// internal/supervisor/setsid_darwin.go), and softnet runs as its child,
+// so both survive daemon death exactly like iron-proxy does. But
+// softnetState is in-memory only — after a restart it's empty even
+// though the running VM's softnet still holds its last-applied policy.
+//
+// This must run after AdoptIronProxies has rehydrated ironProxyState
+// (RunService hooks it immediately after, on the same startup path): for
+// each recovered project it re-puts the deterministic control socket
+// (SoftnetControlSock is a pure function of the project id, so no
+// coordination is needed to reconstruct it) and best-effort re-pushes
+// FORWARDING. The push is a reconcile, not the source of truth — softnet
+// already holds its last policy — but it covers the case where softnet
+// itself also restarted and came back up in its LOCKED boot default, and
+// it brings the daemon's in-memory view back in sync either way.
+//
+// softnetState.put is synchronous (an in-memory map write — fast), but the
+// setPolicy re-push dials a unix socket per project and can block for
+// seconds against a dead/unresponsive softnet child. RunService calls this
+// on the daemon's startup path, so that push runs in a goroutine — a slow
+// or dead socket for one project must not stall the whole daemon (and every
+// other project's `devm shell`) from coming up.
+//
+// ctx is accepted for parity with AdoptIronProxies and future-proofing
+// (a context-aware dial); the current softnetClient doesn't use it.
+//
+// Alongside the FORWARDING re-push, this also best-effort re-pushes the
+// ingress expose map from each project's persisted config — belt and
+// suspenders: softnet's child process retains its last-applied expose
+// map across a daemon-only restart (it isn't reset like the egress
+// policy can be), so this mainly rehydrates the daemon's in-memory view
+// and the port-claims registry pushExposeMap reconciles as a side
+// effect (see expose.go).
+//
+// FORWARDING re-push ordering vs. rebindProjectListeners (runner.go): a
+// project with a ProjectIP gets its guest-origin listener pair rebound
+// by a rebindProjectListeners goroutine later in the daemon-restart
+// sequence, which re-pushes FORWARDING once that pair is bound. Nothing
+// orders that goroutine against this one, so pushing FORWARDING here too
+// would race it. Rather than sequence the two passes (which would make
+// this function block on a live softnet dial per project — exactly
+// what the comment above says it must not do), this function skips its
+// own FORWARDING push for any project with a ProjectIP and leaves the
+// rebind pass as the sole post-restart pusher for it. A project with no
+// ProjectIP never goes through rebindProjectListeners, so this push
+// stays the only one it gets — daemon-restart semantics are unchanged
+// for that class.
+func discoverSoftnet(ctx context.Context, cfg identity.Config, ntpPort int) {
+	for _, id := range ironProxyState.keys() {
+		sock := SoftnetControlSock(cfg, id)
+		softnetState.put(id, sock)
+
+		info, ok := ironProxyState.get(id)
+		if !ok {
+			continue
+		}
+		needsForwardingPush := info.ProjectIP == ""
+		go func(id, sock string, info projectInfo) {
+			snap, snapErr := ReadStateSnapshot(cfg, id)
+			projectDir := ""
+			if snapErr == nil && snap != nil {
+				projectDir = snap.MacCwd
+			}
+			if needsForwardingPush {
+				if err := newSoftnetClient(sock).setPolicy("FORWARDING", endpointFrom(id, info, ntpPort, cfg.TLD)); err != nil {
+					daemonlog.Errorf("serviceapi: discoverSoftnet: setPolicy FORWARDING for %s: %v", id, err)
+				}
+			}
+			if snapErr == nil && snap != nil {
+				if err := pushExposeMap(id, computeExposeMap(snap.Cfg, info.ProjectIP)); err != nil {
+					daemonlog.Errorf("serviceapi: discoverSoftnet: pushExposeMap for %s: %v", id, err)
+				}
+				if err := pushTestHosts(id, computeDirectTestHosts(snap.Cfg)); err != nil {
+					daemonlog.Errorf("serviceapi: discoverSoftnet: pushTestHosts for %s: %v", id, err)
+				}
+			}
+			// Last, so a hung softnet never delays the policy pushes above.
+			logDriftIfAny(id, projectDir, sock)
+		}(id, sock, info)
+	}
+}

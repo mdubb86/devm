@@ -1,0 +1,53 @@
+name: release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    # The private devm-dev repo carries this file too; only the public
+    # repo builds releases.
+    if: github.repository == 'mdubb86/devm'
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      # just runs the goreleaser hooks that wrap the Mac app build
+      # (see `just mac-build` in .goreleaser.yaml). xcodegen generates
+      # the Xcode project mac-build shells into. Xcode itself is
+      # pre-installed on macos-latest.
+      - name: Install just + xcodegen
+        run: brew install just xcodegen
+      # Import the devm-dev signing certificate into a temporary
+      # keychain so `just mac-build`'s codesign step can find it by
+      # name (`CODE_SIGN_IDENTITY=devm-dev`). Cert is the self-signed
+      # local dev cert, exported as P12; enough for our own
+      # distribution channel (Homebrew cask), not App Store.
+      - name: Import signing certificate
+        uses: apple-actions/import-codesign-certs@v3
+        with:
+          p12-file-base64: ${{ secrets.SIGNING_CERT_P12 }}
+          p12-password: ${{ secrets.SIGNING_CERT_PASSWORD }}
+      # Random per-build stamp injected into main.Fingerprint via
+      # goreleaser's ldflags (see .goreleaser.yaml). CLI + daemon share
+      # this value at compile time; drift detection compares them at
+      # command time to catch "binary rebuilt but daemon not restarted."
+      - name: Generate build fingerprint
+        run: echo "FINGERPRINT=$(head -c 8 /dev/urandom | xxd -p)" >> "$GITHUB_ENV"
+      - uses: goreleaser/goreleaser-action@v6
+        with:
+          version: "~> v2"
+          args: release --clean
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          FINGERPRINT: ${{ env.FINGERPRINT }}

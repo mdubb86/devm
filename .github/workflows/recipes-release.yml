@@ -1,0 +1,53 @@
+name: recipes release
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'recipes/**'
+  workflow_dispatch:
+    inputs:
+      reason:
+        description: 'Why the manual re-cut (e.g. build-tool fix)'
+        required: false
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    # The private devm-dev repo carries this file too; only the public
+    # repo builds releases.
+    if: github.repository == 'mdubb86/devm'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Compute SHA tag
+        id: tag
+        run: |
+          TAG="recipes-$(git rev-parse --short HEAD)"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "Computed tag: $TAG"
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Build recipes.db
+        run: |
+          go run ./tools/build-recipes-db \
+            -src recipes \
+            -out recipes.db \
+            -version "${{ steps.tag.outputs.tag }}"
+
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "${{ steps.tag.outputs.tag }}" \
+            --title "${{ steps.tag.outputs.tag }}" \
+            --notes "Built from recipes/ at $(git rev-parse HEAD)." \
+            recipes.db

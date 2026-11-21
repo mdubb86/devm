@@ -1,0 +1,528 @@
+"""Shared fixtures for the devm e2e suite.
+
+The fixtures register cleanup intent in the env-shared registry file
+BEFORE creating any resource. If a fixture's finalizer doesn't run
+(pytest SIGKILL, wedged worker), the bash wrapper's EXIT trap sweeps
+the registry. See internal design notes.
+"""
+from __future__ import annotations
+import os
+import re
+import secrets
+import shutil
+import subprocess
+import tempfile
+import time
+from pathlib import Path
+from typing import Iterator
+
+import pytest
+
+from helpers import Devm, Workspace, registry
+from helpers.tart import TartSandbox
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _ensure_ssh_config_include():
+    """Ensure `~/.ssh/config` includes the devm-e2e fragments dir so the
+    per-test `local_sshd_target` fixture's Host block is resolvable by
+    `ssh -G <alias>` (which the daemon invokes at precondition time).
+
+    Additive and idempotent: we prepend the Include once if missing and
+    leave the file alone otherwise. No teardown — the directive is
+    harmless when no fragment files exist.
+    """
+    cfg_dir = Path.home() / ".ssh" / "config.d"
+    cfg_dir.mkdir(parents=True, exist_ok=True)
+    cfg_dir.chmod(0o700)
+    main = Path.home() / ".ssh" / "config"
+    include = "Include ~/.ssh/config.d/devm-e2e-*.conf"
+    body = main.read_text() if main.exists() else ""
+    if include not in body:
+        main.write_text(include + "\n" + body)
+        main.chmod(0o600)
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _playwright_chromium_installed():
+    """Fail loudly on first collect if Playwright's Chromium is missing.
+
+    Without this, tests that import helpers.playwright die on
+    playwright.sync_api.Error at browser launch — an unactionable
+    stacktrace. Here we surface the exact remedy up front.
+    """
+    try:
+        from playwright.sync_api import sync_playwright
+    except ImportError as e:
+        pytest.exit(
+            f"playwright not installed: {e}\n"
+            "run: pip install -e e2e && playwright install chromium",
+            returncode=2,
+        )
+    try:
+        with sync_playwright() as p:
+            browser = p.chromium.launch(headless=True)
+            browser.close()
+    except Exception as e:
+        pytest.exit(
+            f"playwright chromium not usable: {e}\n"
+            "run: playwright install chromium",
+            returncode=2,
+        )
+
+
+def pytest_collection_modifyitems(config, items):
+    """Auto-mark tests that must NOT run under pytest-xdist parallelism:
+
+      - `pty`: uses helpers.Shell (pexpect + pty.forkpty). xdist workers
+        have a background RPC thread; forkpty in a multi-threaded process
+        races on lock inheritance (Python's own DeprecationWarning on
+        forkpty spells this out).
+
+      - `install`: exercises devm's install lifecycle — `devm install`,
+        `devm uninstall`, or `devm service restart` — which mutates
+        global system state (LaunchDaemon plist, /etc/resolver/e2e.test,
+        the system CA, the tart devm-e2e-base image). Concurrent runs of
+        these tests step on each other's install/uninstall sequences.
+        Semantic pair of the `devm` marker: install = installing devm
+        itself; devm = using it. Run via `just e2e-install`.
+
+    Both markers land in run.sh's single-process phase. Detection is a
+    source-grep at collect time; matches beat missed marks because the
+    cost of a single-process-run test is only latency, not correctness.
+    """
+    # `install` marker: tests that MUTATE the shared daemon during their
+    # run. Merely NEEDING the daemon isn't enough; the session-scoped
+    # _daemon_matches_devm_bin fixture handles that precondition once
+    # at session start.
+    _install_hints = (
+        'devm.path, "install"',
+        'devm.path, "uninstall"',
+        '"service", "restart"',
+    )
+    for item in items:
+        try:
+            src = Path(item.fspath).read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        if "Shell(" in src or "from helpers import Shell" in src:
+            item.add_marker(pytest.mark.pty)
+        if any(h in src for h in _install_hints):
+            item.add_marker(pytest.mark.install)
+
+
+
+
+# --- session ---
+
+@pytest.fixture(scope="session")
+def devm_path() -> str:
+    """Path to the bootstrapped e2e devm binary."""
+    return "/usr/local/bin/devm-e2e"
+
+
+# --- per-test ---
+
+# (workspace is below; declared as a forward-ref dependency of `devm`.)
+@pytest.fixture
+def devm(devm_path, workspace) -> Devm:
+    """Devm CLI wrapper bound to the test's workspace as cwd, so
+    `devm.reconcile()` / `stop()` / `teardown()` read the test's
+    devm.yaml (not e2e/'s)."""
+    return Devm(devm_path, cwd=str(workspace.path))
+
+
+def _slug_from_node(name: str) -> str:
+    """`test_01_cold_start` -> `cold-start` (within 20 chars, alnum + hyphens)."""
+    s = re.sub(r"^test_", "", name)
+    s = re.sub(r"^\d+_", "", s)
+    s = s.replace("_", "-")
+    s = re.sub(r"[^a-z0-9-]", "", s.lower())
+    return s[:20].rstrip("-") or "x"
+
+
+@pytest.fixture
+def sandbox_name(request) -> Iterator[str]:
+    """Unique sandbox name; registered for cleanup before yield."""
+    slug = _slug_from_node(request.node.name)
+    name = f"e2e-{slug}-{secrets.token_hex(2)}"
+    registry.append("sandbox", name)
+    try:
+        yield name
+    finally:
+        registry.remove("sandbox", name)
+
+
+def _port_offset_from_file(filename: str) -> int:
+    """Derive a deterministic, collision-free port_offset from the test
+    file's NN_ prefix (e.g., `test_08_reconcile_live_port.py` -> 50800).
+
+    Hash-of-sandbox-name with 70 buckets has a ~73% chance of collision
+    across 14 parallel tests (birthday paradox), which makes the suite
+    flaky. Using the test number from the filename gives every test its
+    own bucket. Canonical ports we use are all coprime-mod-100 with each
+    other (3000, 8080, 8081, 9090) so 100-port spacing rules out cross-
+    canonical host-port collisions too.
+
+    Note: take the filename, not request.node.name — the latter is the
+    function name (e.g., `test_reconcile_live_port`), which has no digits.
+    """
+    m = re.match(r"^test_(\d+)_", filename)
+    if not m:
+        return 50000
+    return 50000 + int(m.group(1)) * 100
+
+
+@pytest.fixture
+def workspace(request, devm_path, sandbox_name) -> Iterator[Workspace]:
+    """Temp workspace dir bound to the test's sandbox_name.
+
+    Cleans up the VM AND iron-proxy for the project at the end via
+    `devm teardown --yes`. Tests don't need their own try/finally to
+    do this — the fixture is authoritative. Tests that legitimately
+    want to leave the sandbox in a specific end state (rare) can call
+    `devm teardown` themselves; the finally here is idempotent.
+    """
+    slug = _slug_from_node(request.node.name)
+    # Resolve symlinks so the path matches what devm (Go) sees inside
+    # the spawned shell. On macOS, tempfile.mkdtemp returns
+    # `/var/folders/...` but pexpect.spawn(cwd=...) → chdir → Go
+    # os.Getwd surfaces the canonical `/private/var/folders/...`. If we
+    # yield the unresolved form, every test that compares against
+    # workspace.path (CLAUDE_CONFIG_DIR, $WORKSPACE, …) trips on the
+    # symlink. Linux is a no-op (mkdtemp already canonical).
+    path = Path(tempfile.mkdtemp(prefix=f"devm-e2e-{slug}-")).resolve()
+    registry.append("workspace", str(path))
+    try:
+        port_offset = _port_offset_from_file(Path(request.node.fspath).name)
+        # project.name is a single field now, serving as both the project
+        # identity (iron-proxy/routes/state keys) and the tart VM name. Use
+        # the unique sandbox_name for both so identity lookups (workspace.slug)
+        # match what the daemon keys on.
+        ws = Workspace(path, slug=sandbox_name, vm_name=sandbox_name, port_offset=port_offset)
+        ws.write_devmyaml()  # minimal config; tests can call write_devmyaml again with extras
+        # If the test's devm.yaml references any `secret:` values, seed the
+        # devm secret store before yielding so cold-start doesn't fail on
+        # a missing secret. `e2e_default` is the well-known name tests use
+        # when they need auth to reach the fixture remote; if a real github
+        # PAT is available via DEVM_E2E_GH_TOKEN, seed that.
+        gh_token = os.environ.get("DEVM_E2E_GH_TOKEN", "")
+        if gh_token:
+            subprocess.run(
+                [devm_path, "secret", "set", "e2e_default"],
+                cwd=str(path),
+                input=(gh_token + "\n").encode(),
+                capture_output=True,
+                timeout=15,
+                check=True,
+            )
+        yield ws
+    finally:
+        # Guaranteed teardown: stops the VM AND its iron-proxy child
+        # (which the tart-VM-only sweep in registry can't touch — it's
+        # a Mac process, not a tart entity). Best-effort — if the daemon
+        # is down or the sandbox is already absent, teardown noops with
+        # non-zero, which we swallow.
+        try:
+            import subprocess as _sp
+            _sp.run(
+                [devm_path, "teardown", "--yes"],
+                cwd=str(path),
+                capture_output=True,
+                timeout=60,
+            )
+        except Exception:
+            pass
+        # Shut down the mac-side bare-repo http.server if one was started.
+        try:
+            ws.teardown()
+        except Exception:
+            pass
+        shutil.rmtree(path, ignore_errors=True)
+        # Sibling dirs bare_repo_url() may have created (work checkout +
+        # bare clone) aren't under `path`, so they need their own sweep.
+        shutil.rmtree(f"{path}-repo-work", ignore_errors=True)
+        shutil.rmtree(f"{path}-repo.git", ignore_errors=True)
+        registry.remove("workspace", str(path))
+
+
+@pytest.fixture
+def sudo_capable():
+    """Skips the test if sudo can't realistically prompt the user.
+
+    Skipped conditions:
+      - non-macOS (sudo-required tests in this suite are macOS-only)
+      - /dev/tty unavailable (CI / no controlling terminal — sudo
+        would hang on a prompt it can't deliver)
+
+    No priming: sudo opens /dev/tty directly for its Touch ID (or
+    password) prompt, independent of pytest's capture of stdin/stdout,
+    so tests that need sudo just call it and the prompt fires
+    naturally. On macOS Touch ID doesn't share the sudo timestamp
+    cache anyway — priming would just add an extra interaction per
+    run.
+    """
+    import platform as _platform
+
+    if _platform.system() != "Darwin":
+        pytest.skip("sudo-required test runs on macOS only")
+    try:
+        open("/dev/tty").close()
+    except OSError:
+        pytest.skip("no /dev/tty — sudo can't prompt, skipping interactive test")
+
+
+_LAUNCH_DAEMON_PLIST = Path("/Library/LaunchDaemons/com.devm.e2e.service.plist")
+
+
+def _daemon_program_path() -> str | None:
+    """Extract the ProgramArguments[0] from the running LaunchDaemon.
+    Returns None if no daemon is registered.
+    """
+    r = subprocess.run(
+        ["launchctl", "print", "system/com.devm.e2e.service"],
+        capture_output=True, text=True, timeout=10,
+    )
+    if r.returncode != 0:
+        return None
+    for line in r.stdout.splitlines():
+        line = line.strip()
+        if line.startswith("program = "):
+            return line[len("program = "):].strip()
+    return None
+
+
+def _install_devm(devm_path: str) -> None:
+    r = subprocess.run(
+        [devm_path, "install"],
+        capture_output=True, timeout=780,
+    )
+    if r.returncode != 0:
+        pytest.exit(
+            f"session prerequisite `devm install` failed:\n"
+            f"stdout={r.stdout.decode()!r}\n"
+            f"stderr={r.stderr.decode()!r}"
+        )
+    deadline = time.monotonic() + 15
+    sock = Path(os.path.expanduser(
+        "~/Library/Application Support/devm-e2e/devm.sock"
+    ))
+    while time.monotonic() < deadline:
+        if sock.exists():
+            return
+        time.sleep(0.25)
+
+
+def _uninstall_devm(devm_path: str) -> None:
+    subprocess.run(
+        [devm_path, "uninstall"],
+        capture_output=True, timeout=30,
+    )
+
+
+@pytest.fixture(autouse=True)
+def _daemon_matches_devm_bin(request, devm_path):
+    """Verify-only safety net: the LaunchDaemon program path must match
+    the bootstrapped devm-e2e binary. The actual install happens once
+    up-front via `just e2e-bootstrap`; if we ever get here and the
+    daemon doesn't match, either bootstrap didn't run, or a previous
+    test uninstalled it and didn't restore it. Either way, aborting the
+    session immediately with an actionable message is better than 40
+    misleading per-test failures.
+
+    Contract tests (marked `contract`) don't touch the devm daemon at
+    all — they pin behavior of external tools like tart or iron-proxy
+    directly, and skip the precondition entirely.
+    """
+    if request.node.get_closest_marker("contract") is not None:
+        yield
+        return
+
+    import platform as _platform
+    if _platform.system() != "Darwin":
+        yield
+        return
+
+    current_program = _daemon_program_path()
+    if current_program == devm_path and _LAUNCH_DAEMON_PLIST.exists():
+        yield
+        return
+
+    pytest.exit(
+        f"e2e devm daemon doesn't match /usr/local/bin/devm-e2e.\n"
+        f"Either bootstrap didn't run, or a test left it in a broken state.\n\n"
+        f"  DEVM_BIN            = {devm_path}\n"
+        f"  daemon program path = {current_program!r}\n"
+        f"  plist exists        = {_LAUNCH_DAEMON_PLIST.exists()}\n\n"
+        f"Fix: `just e2e-bootstrap` (or `just e2e-teardown && just e2e-bootstrap`).",
+        returncode=2,
+    )
+
+
+# Kept for backward compatibility with tests that still list
+# `devm_installed` as a param — it's now a session-level guarantee,
+# so per-test it's a no-op.
+@pytest.fixture
+def devm_installed(_daemon_matches_devm_bin):
+    yield
+
+
+@pytest.fixture
+def tart_sandbox(devm, sandbox_name, workspace) -> TartSandbox:
+    """Cold-starts the project VM via `devm start` (returns once the VM is
+    provisioned and running; does not attach a shell).
+
+    Tests that need to run commands inside the VM use the returned
+    TartSandbox handle. Teardown is automatic via the existing
+    `sandbox_name` fixture's registry cleanup — but tests can also
+    call `devm.teardown(yes=True)` explicitly to verify teardown
+    behavior."""
+    subprocess.run(
+        [devm.path, "start"],
+        capture_output=True, cwd=str(workspace.path), timeout=300,
+    )
+    # We don't fail on non-zero; some tests may want to assert on
+    # cold-start failures themselves. The fixture just gives them a
+    # handle to inspect state.
+
+    yield TartSandbox(name=sandbox_name)
+
+
+@pytest.fixture(scope="session")
+def inspector_vm() -> Iterator[TartSandbox]:
+    """Clone cirruslabs/debian to a session-shared VM and boot it.
+
+    Read-only tart contract tests share this VM to avoid 30-60s of
+    clone+boot per test. Lifecycle tests (clone, pull, run, delete)
+    create their own VMs with unique names.
+    """
+    import platform
+    if platform.system() != "Darwin":
+        pytest.skip("tart contract tests run on macOS only")
+    if shutil.which("tart") is None:
+        pytest.skip("tart not on PATH")
+
+    name = f"inspect-{secrets.token_hex(2)}"
+    template = "ghcr.io/cirruslabs/debian:latest"
+
+    registry.append("sandbox", name)
+    try:
+        subprocess.run(["tart", "pull", template], check=True, timeout=300)
+        subprocess.run(["tart", "clone", template, name], check=True, timeout=60)
+
+        proc = subprocess.Popen(
+            ["tart", "run", "--no-graphics", name],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        )
+        try:
+            vm = TartSandbox(name=name)
+            assert vm.wait_running(timeout=120), f"{name} never reached running"
+            for _ in range(60):
+                if vm.ip():
+                    break
+                time.sleep(1)
+            else:
+                raise RuntimeError(f"{name} never got an IP")
+            yield vm
+        finally:
+            subprocess.run(["tart", "stop", name], capture_output=True, timeout=30)
+            proc.wait(timeout=30)
+    finally:
+        subprocess.run(["tart", "delete", name], capture_output=True, timeout=10)
+        registry.remove("sandbox", name)
+
+
+@pytest.fixture
+def base_clone() -> Iterator[str]:
+    """Clones `devm-e2e-base` raw — NO daemon, NO provisioning — and boots
+    it headless via `tart run`. Yields the clone's name so a test can
+    `tart exec` against the pre-daemon boot-integrity gate floor: a
+    bare boot of devm-e2e-base itself, not a devm-managed project VM.
+
+    Unlike `tart_sandbox` (which goes through `devm start` and full
+    provisioning), this fixture never touches the devm daemon — it's
+    the raw-clone pattern also used by the session-scoped
+    `inspector_vm` fixture, just cloning devm-e2e-base instead of the
+    upstream template and scoped per-test (each test wants its own
+    untouched floor).
+
+    `tart stop` + `tart delete` on teardown.
+    """
+    import platform as _platform
+
+    if _platform.system() != "Darwin":
+        pytest.skip("base-image gate test runs on macOS only")
+    if shutil.which("tart") is None:
+        pytest.skip("tart not on PATH")
+
+    name = f"e2e-baseclone-{secrets.token_hex(4)}"
+    registry.append("sandbox", name)
+    try:
+        r = subprocess.run(
+            ["tart", "clone", "devm-e2e-base", name],
+            capture_output=True, timeout=60,
+        )
+        assert r.returncode == 0, (
+            f"tart clone devm-e2e-base failed: {r.stderr.decode(errors='replace')}"
+        )
+
+        proc = subprocess.Popen(
+            ["tart", "run", "--no-graphics", name],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        )
+        try:
+            vm = TartSandbox(name=name)
+            assert vm.wait_running(timeout=60), f"{name} never reached running"
+
+            # Poll `tart exec <vm> true` for tart-guest-agent readiness.
+            # Each attempt is individually bounded; a hung attempt (the
+            # agent isn't listening yet) must not abort the whole poll —
+            # subprocess.run raises TimeoutExpired on a per-call timeout,
+            # so that's caught and treated as "not ready yet".
+            deadline = time.monotonic() + 90
+            ready = False
+            while time.monotonic() < deadline:
+                try:
+                    r = subprocess.run(
+                        ["tart", "exec", name, "true"],
+                        capture_output=True, timeout=5,
+                    )
+                    if r.returncode == 0:
+                        ready = True
+                        break
+                except subprocess.TimeoutExpired:
+                    pass
+                time.sleep(1)
+            assert ready, f"{name} never became reachable via tart exec"
+
+            yield name
+        finally:
+            subprocess.run(["tart", "stop", name], capture_output=True, timeout=30)
+            proc.wait(timeout=30)
+    finally:
+        subprocess.run(["tart", "delete", name], capture_output=True, timeout=10)
+        registry.remove("sandbox", name)
+
+
+@pytest.fixture
+def phase():
+    """Helper for sub-test phase timing.
+
+        phase("cold-start-1")
+        ...
+        phase("reconcile")
+
+    Prints `[phase] <label>  Xs (total Ys)` to stdout. Opt-in per
+    test; intended for the slow recreate tests where breakdowns matter.
+    """
+    start = [time.monotonic()]
+    last = [time.monotonic()]
+
+    def mark(label: str) -> None:
+        now = time.monotonic()
+        delta = now - last[0]
+        total = now - start[0]
+        print(f"[phase] {label:<24} {delta:6.1f}s   (total {total:.1f}s)")
+        last[0] = now
+
+    return mark

@@ -1,0 +1,1113 @@
+package reconcile
+
+import (
+	"os"
+	"path/filepath"
+	"testing"
+
+	"github.com/mdubb86/devm/internal/render"
+	"github.com/mdubb86/devm/internal/schema"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+)
+
+func cfgWithServices(svcs map[string]schema.Service) schema.Config {
+	return schema.Config{Services: schema.OrderedMapOf(svcs)}
+}
+
+func cfgWith(services map[string]schema.Service) schema.Config {
+	return schema.Config{
+		Project:  schema.Project{Name: "x"},
+		Services: schema.OrderedMapOf(services),
+	}
+}
+
+func TestBucketStrings(t *testing.T) {
+	assert.Equal(t, "live", BucketLive.String())
+	assert.Equal(t, "restart", BucketRestartVM.String())
+	assert.Equal(t, "teardown", BucketTeardownVM.String())
+}
+
+func TestChangeKindBuckets(t *testing.T) {
+	// Live: ports (add/remove/change), env (add/remove/change)
+	assert.Equal(t, BucketLive, KindPortAdd.Bucket())
+	assert.Equal(t, BucketLive, KindPortRemove.Bucket())
+	assert.Equal(t, BucketLive, KindPortChange.Bucket())
+	assert.Equal(t, BucketLive, KindNetworkAdd.Bucket())
+	assert.Equal(t, BucketLive, KindNetworkRemove.Bucket())
+	assert.Equal(t, BucketLive, KindEnvAdd.Bucket())
+	assert.Equal(t, BucketLive, KindEnvRemove.Bucket())
+	assert.Equal(t, BucketLive, KindEnvChange.Bucket())
+
+	// Teardown+shell: image, identity
+	assert.Equal(t, BucketTeardownVM, KindImageChange.Bucket())
+	assert.Equal(t, BucketTeardownVM, KindIdentityChange.Bucket())
+
+	// Teardown: docker enable/disable rides the FirstBoot-gated
+	// install path, so it only sticks on a fresh VM.
+	assert.Equal(t, BucketTeardownVM, KindDockerEnabledChange.Bucket())
+
+	// Restart: buildCache and swap are plain sizing directives.
+	assert.Equal(t, BucketRestartVM, KindDockerBuildCacheChange.Bucket())
+	assert.Equal(t, BucketRestartVM, KindSwapChange.Bucket())
+
+	// Live: service unit fields and hostname
+	assert.Equal(t, BucketLive, KindServiceExecChange.Bucket())
+	assert.Equal(t, BucketLive, KindServiceRestartChange.Bucket())
+	assert.Equal(t, BucketLive, KindServiceAfterChange.Bucket())
+	assert.Equal(t, BucketLive, KindServiceWorkdirChange.Bucket())
+	assert.Equal(t, BucketLive, KindServiceUserChange.Bucket())
+	assert.Equal(t, BucketLive, KindServiceSystemdOverrideChange.Bucket())
+	assert.Equal(t, BucketLive, KindServiceHostnameChange.Bucket())
+
+	// Live: path (same fan-out as env via /etc/environment)
+	assert.Equal(t, BucketLive, KindPathChange.Bucket())
+
+}
+
+func TestComputePackagesChange_SetDiff(t *testing.T) {
+	old := schema.Config{Packages: []string{"jq", "chromium"}}
+	new := schema.Config{Packages: []string{"jq", "sl"}}
+	got := computePackagesChange(old, new)
+	require.Equal(t, []Change{
+		{Kind: KindPackageAdd, Key: "sl", New: "sl"},
+		{Kind: KindPackageRemove, Key: "chromium", Old: "chromium"},
+	}, got)
+}
+
+func TestComputePackagesChange_ReorderIsNoop(t *testing.T) {
+	old := schema.Config{Packages: []string{"a", "b"}}
+	new := schema.Config{Packages: []string{"b", "a"}}
+	require.Empty(t, computePackagesChange(old, new))
+}
+
+func TestPackageKindsAreLive(t *testing.T) {
+	require.Equal(t, BucketLive, KindPackageAdd.Bucket())
+	require.Equal(t, BucketLive, KindPackageRemove.Bucket())
+}
+
+func TestComputePathChange(t *testing.T) {
+	old := cfgWith(map[string]schema.Service{})
+	old.Path = []string{"/r/.cargo/bin"}
+	new := cfgWith(map[string]schema.Service{})
+	new.Path = []string{"/r/.cargo/bin", "/r/node_modules/.bin"}
+
+	changes := computePathChange(old, new)
+	require.Len(t, changes, 1)
+	assert.Equal(t, KindPathChange, changes[0].Kind)
+	assert.Equal(t, "/r/.cargo/bin", changes[0].Old)
+	assert.Equal(t, "/r/.cargo/bin:/r/node_modules/.bin", changes[0].New)
+
+	// Same list → no change.
+	assert.Empty(t, computePathChange(old, old))
+
+	// Reorder is also a change.
+	reordered := cfgWith(map[string]schema.Service{})
+	reordered.Path = []string{"/r/node_modules/.bin", "/r/.cargo/bin"}
+	assert.Len(t, computePathChange(new, reordered), 1, "reorder must produce a change")
+}
+
+func TestComputePortChanges_Add(t *testing.T) {
+	old := cfgWithServices(map[string]schema.Service{})
+	new := cfgWithServices(map[string]schema.Service{"api": {Port: 8080}})
+	changes := ComputePortChanges(old, new)
+	assert.Len(t, changes, 1)
+	assert.Equal(t, KindPortAdd, changes[0].Kind)
+	assert.Equal(t, "api", changes[0].Service)
+	assert.Equal(t, "8080", changes[0].Key)
+	assert.Equal(t, "", changes[0].Old)
+	assert.Equal(t, "8080", changes[0].New)
+}
+
+func TestComputePortChanges_Remove(t *testing.T) {
+	old := cfgWithServices(map[string]schema.Service{"api": {Port: 8080}})
+	new := cfgWithServices(map[string]schema.Service{})
+	changes := ComputePortChanges(old, new)
+	assert.Len(t, changes, 1)
+	assert.Equal(t, KindPortRemove, changes[0].Kind)
+}
+
+func TestComputePortChanges_Change(t *testing.T) {
+	old := cfgWithServices(map[string]schema.Service{"api": {Port: 8080}})
+	new := cfgWithServices(map[string]schema.Service{"api": {Port: 9090}})
+	changes := ComputePortChanges(old, new)
+	assert.Len(t, changes, 1)
+	assert.Equal(t, KindPortChange, changes[0].Kind)
+	assert.Equal(t, "8080", changes[0].Old)
+	assert.Equal(t, "9090", changes[0].New)
+}
+
+func TestComputePortChanges_NoOp(t *testing.T) {
+	cfg := cfgWithServices(map[string]schema.Service{"api": {Port: 8080}})
+	assert.Empty(t, ComputePortChanges(cfg, cfg))
+}
+
+func TestComputePortChanges_Deterministic(t *testing.T) {
+	old := cfgWithServices(map[string]schema.Service{})
+	new := cfgWithServices(map[string]schema.Service{
+		"zeta":  {Port: 3000},
+		"alpha": {Port: 4000},
+	})
+	c := ComputePortChanges(old, new)
+	assert.Len(t, c, 2)
+	assert.Equal(t, "alpha", c[0].Service)
+	assert.Equal(t, "zeta", c[1].Service)
+}
+
+func TestComputeEnvChanges(t *testing.T) {
+	old := cfgWithServices(map[string]schema.Service{
+		"api": {Env: map[string]schema.EnvValue{"LOG_LEVEL": {Literal: "info"}, "STALE": {Literal: "1"}}},
+	})
+	new := cfgWithServices(map[string]schema.Service{
+		"api": {Env: map[string]schema.EnvValue{"LOG_LEVEL": {Literal: "debug"}, "NEW": {Literal: "yes"}}},
+	})
+	changes, err := ComputeAllChanges(old, new, t.TempDir(), t.TempDir(), nil, nil, nil, "", "")
+	require.NoError(t, err)
+	var kinds []ChangeKind
+	for _, c := range changes {
+		kinds = append(kinds, c.Kind)
+	}
+	assert.Contains(t, kinds, KindEnvAdd)
+	assert.Contains(t, kinds, KindEnvRemove)
+	assert.Contains(t, kinds, KindEnvChange)
+}
+
+func TestComputeGlobalEnvChanges(t *testing.T) {
+	old := schema.Config{Env: map[string]schema.EnvValue{"FOO": {Literal: "old"}, "STALE": {Literal: "1"}}}
+	new := schema.Config{Env: map[string]schema.EnvValue{"FOO": {Literal: "new"}, "ADDED": {Literal: "yes"}}}
+	changes, err := ComputeAllChanges(old, new, t.TempDir(), t.TempDir(), nil, nil, nil, "", "")
+	require.NoError(t, err)
+	var kinds []ChangeKind
+	for _, c := range changes {
+		kinds = append(kinds, c.Kind)
+	}
+	assert.Contains(t, kinds, KindEnvAdd, "ADDED should surface as an add")
+	assert.Contains(t, kinds, KindEnvRemove, "STALE should surface as a remove")
+	assert.Contains(t, kinds, KindEnvChange, "FOO should surface as a change")
+}
+
+func TestDiff_ServiceExecChange_IsBucketLive(t *testing.T) {
+	old := cfgWithServices(map[string]schema.Service{
+		"api": {ExecArgv: []string{"old"}},
+	})
+	new := cfgWithServices(map[string]schema.Service{
+		"api": {ExecArgv: []string{"new"}},
+	})
+	changes, err := ComputeAllChanges(old, new, t.TempDir(), t.TempDir(), nil, nil, nil, "", "")
+	require.NoError(t, err)
+	found := false
+	for _, c := range changes {
+		if c.Kind == KindServiceExecChange {
+			found = true
+			assert.Equal(t, BucketLive, c.Bucket())
+			assert.Equal(t, "api", c.Service)
+		}
+	}
+	assert.True(t, found, "expected KindServiceExecChange")
+}
+
+func TestDiff_ServiceRestartChange_IsBucketLive(t *testing.T) {
+	old := cfgWithServices(map[string]schema.Service{
+		"api": {ExecArgv: []string{"run"}, Restart: "no"},
+	})
+	new := cfgWithServices(map[string]schema.Service{
+		"api": {ExecArgv: []string{"run"}, Restart: "always"},
+	})
+	changes, err := ComputeAllChanges(old, new, t.TempDir(), t.TempDir(), nil, nil, nil, "", "")
+	require.NoError(t, err)
+	found := false
+	for _, c := range changes {
+		if c.Kind == KindServiceRestartChange {
+			found = true
+			assert.Equal(t, BucketLive, c.Bucket())
+		}
+	}
+	assert.True(t, found, "expected KindServiceRestartChange")
+}
+
+func TestDiff_ServiceAfterChange_IsBucketLive(t *testing.T) {
+	old := cfgWithServices(map[string]schema.Service{
+		"api": {ExecArgv: []string{"run"}, After: []string{"network.target"}},
+	})
+	new := cfgWithServices(map[string]schema.Service{
+		"api": {ExecArgv: []string{"run"}, After: []string{"network.target", "db.service"}},
+	})
+	changes, err := ComputeAllChanges(old, new, t.TempDir(), t.TempDir(), nil, nil, nil, "", "")
+	require.NoError(t, err)
+	found := false
+	for _, c := range changes {
+		if c.Kind == KindServiceAfterChange {
+			found = true
+			assert.Equal(t, BucketLive, c.Bucket())
+		}
+	}
+	assert.True(t, found, "expected KindServiceAfterChange")
+}
+
+func TestDiff_ServiceWorkdirChange_IsBucketLive(t *testing.T) {
+	old := cfgWithServices(map[string]schema.Service{
+		"api": {ExecArgv: []string{"run"}, WorkDir: "/old"},
+	})
+	new := cfgWithServices(map[string]schema.Service{
+		"api": {ExecArgv: []string{"run"}, WorkDir: "/new"},
+	})
+	changes, err := ComputeAllChanges(old, new, t.TempDir(), t.TempDir(), nil, nil, nil, "", "")
+	require.NoError(t, err)
+	found := false
+	for _, c := range changes {
+		if c.Kind == KindServiceWorkdirChange {
+			found = true
+			assert.Equal(t, BucketLive, c.Bucket())
+		}
+	}
+	assert.True(t, found, "expected KindServiceWorkdirChange")
+}
+
+func TestDiff_ServiceUserChange_IsBucketLive(t *testing.T) {
+	old := cfgWithServices(map[string]schema.Service{
+		"api": {ExecArgv: []string{"run"}, User: "alice"},
+	})
+	new := cfgWithServices(map[string]schema.Service{
+		"api": {ExecArgv: []string{"run"}, User: "bob"},
+	})
+	changes, err := ComputeAllChanges(old, new, t.TempDir(), t.TempDir(), nil, nil, nil, "", "")
+	require.NoError(t, err)
+	found := false
+	for _, c := range changes {
+		if c.Kind == KindServiceUserChange {
+			found = true
+			assert.Equal(t, BucketLive, c.Bucket())
+		}
+	}
+	assert.True(t, found, "expected KindServiceUserChange")
+}
+
+func TestDiff_ServiceSystemdOverrideChange_IsBucketLive(t *testing.T) {
+	old := cfgWithServices(map[string]schema.Service{
+		"api": {Systemd: "old-unit-content"},
+	})
+	new := cfgWithServices(map[string]schema.Service{
+		"api": {Systemd: "new-unit-content"},
+	})
+	changes, err := ComputeAllChanges(old, new, t.TempDir(), t.TempDir(), nil, nil, nil, "", "")
+	require.NoError(t, err)
+	found := false
+	for _, c := range changes {
+		if c.Kind == KindServiceSystemdOverrideChange {
+			found = true
+			assert.Equal(t, BucketLive, c.Bucket())
+		}
+	}
+	assert.True(t, found, "expected KindServiceSystemdOverrideChange")
+}
+
+func TestDiff_ServiceHostnameChange_IsBucketLive(t *testing.T) {
+	old := cfgWithServices(map[string]schema.Service{
+		"api": {Port: 8080, Hostname: "api.test"},
+	})
+	new := cfgWithServices(map[string]schema.Service{
+		"api": {Port: 8080, Hostname: "api2.test"},
+	})
+	changes, err := ComputeAllChanges(old, new, t.TempDir(), t.TempDir(), nil, nil, nil, "", "")
+	require.NoError(t, err)
+	found := false
+	for _, c := range changes {
+		if c.Kind == KindServiceHostnameChange {
+			found = true
+			assert.Equal(t, BucketLive, c.Bucket())
+			assert.Equal(t, "api.test", c.Old)
+			assert.Equal(t, "api2.test", c.New)
+		}
+	}
+	assert.True(t, found, "expected KindServiceHostnameChange")
+}
+
+func TestComputeDirectChanges(t *testing.T) {
+	base := schema.Config{Services: schema.OrderedMapOf(map[string]schema.Service{
+		"db": {Port: 54322, Hostname: "db.test"},
+	})}
+	// Flip to direct.
+	next := schema.Config{Services: schema.OrderedMapOf(map[string]schema.Service{
+		"db": {Port: 54322, Hostname: "db.test", Direct: true},
+	})}
+	changes := computeDirectChanges(base, next)
+	require.Len(t, changes, 1)
+	assert.Equal(t, KindServiceDirectChange, changes[0].Kind)
+	assert.Equal(t, "db", changes[0].Service)
+	assert.Equal(t, "false", changes[0].Old)
+	assert.Equal(t, "true", changes[0].New)
+	assert.Equal(t, BucketLive, changes[0].Bucket())
+
+	// No change → no diff.
+	assert.Empty(t, computeDirectChanges(next, next))
+
+	// Removing a direct service (service disappears) is a direct change.
+	gone := schema.Config{Services: schema.OrderedMapOf(map[string]schema.Service{})}
+	require.Len(t, computeDirectChanges(next, gone), 1)
+}
+
+func TestDiff_PackagesChange_IsBucketLive(t *testing.T) {
+	old := schema.Config{Packages: []string{"jq"}}
+	new := schema.Config{Packages: []string{"jq", "ripgrep"}}
+	changes, err := ComputeAllChanges(old, new, t.TempDir(), t.TempDir(), nil, nil, nil, "", "")
+	require.NoError(t, err)
+	found := false
+	for _, c := range changes {
+		if c.Kind == KindPackageAdd {
+			found = true
+			assert.Equal(t, BucketLive, c.Bucket())
+		}
+	}
+	assert.True(t, found, "expected KindPackageAdd")
+}
+
+func TestComputeImageChange(t *testing.T) {
+	// BaseImage is now an empty struct; image changes are detected
+	// via identity change or install changes. Test that no KindImageChange
+	// is emitted for identical (empty) BaseImage structs.
+	old := schema.Config{Project: schema.Project{Name: "p"}}
+	new := schema.Config{Project: schema.Project{Name: "p"}}
+	changes, err := ComputeAllChanges(old, new, t.TempDir(), t.TempDir(), nil, nil, nil, "", "")
+	require.NoError(t, err)
+	for _, c := range changes {
+		assert.NotEqual(t, KindImageChange, c.Kind, "no image change for identical config")
+	}
+}
+
+func TestComputeIdentityChange(t *testing.T) {
+	old := schema.Config{Project: schema.Project{Name: "p1"}}
+	new := schema.Config{Project: schema.Project{Name: "p2"}}
+	changes, err := ComputeAllChanges(old, new, t.TempDir(), t.TempDir(), nil, nil, nil, "", "")
+	require.NoError(t, err)
+	assert.Len(t, changes, 1)
+	assert.Equal(t, KindIdentityChange, changes[0].Kind)
+}
+
+func TestComputeDockerChanges_OnToOff(t *testing.T) {
+	old := schema.Config{Docker: &schema.DockerConfig{Enabled: true}}
+	new := schema.Config{}
+	changes := computeDockerChanges(old, new)
+	require.Len(t, changes, 1)
+	assert.Equal(t, KindDockerEnabledChange, changes[0].Kind)
+}
+
+func TestComputeDockerChanges_OffToOn(t *testing.T) {
+	old := schema.Config{}
+	new := schema.Config{Docker: &schema.DockerConfig{Enabled: true}}
+	changes := computeDockerChanges(old, new)
+	require.Len(t, changes, 1)
+	assert.Equal(t, KindDockerEnabledChange, changes[0].Kind)
+}
+
+func TestComputeDockerChanges_NoChange(t *testing.T) {
+	old := schema.Config{Docker: &schema.DockerConfig{Enabled: true}}
+	new := schema.Config{Docker: &schema.DockerConfig{Enabled: true}}
+	changes := computeDockerChanges(old, new)
+	assert.Empty(t, changes)
+}
+
+func TestComputeAllChanges_SwapNilToAbsolute(t *testing.T) {
+	s := func(v string) *string { return &v }
+	old := schema.Config{Project: schema.Project{Name: "p"}}
+	new := schema.Config{Project: schema.Project{Name: "p"}, Swap: s("16G")}
+	changes, err := ComputeAllChanges(old, new, t.TempDir(), t.TempDir(), nil, nil, nil, "", "")
+	require.NoError(t, err)
+	require.Len(t, changes, 1)
+	assert.Equal(t, KindSwapChange, changes[0].Kind)
+	assert.Equal(t, BucketRestartVM, changes[0].Bucket())
+}
+
+func TestComputeAllChanges_SwapPercentChange(t *testing.T) {
+	s := func(v string) *string { return &v }
+	old := schema.Config{Project: schema.Project{Name: "p"}, Swap: s("50%")}
+	new := schema.Config{Project: schema.Project{Name: "p"}, Swap: s("30%")}
+	changes, err := ComputeAllChanges(old, new, t.TempDir(), t.TempDir(), nil, nil, nil, "", "")
+	require.NoError(t, err)
+	require.Len(t, changes, 1)
+	assert.Equal(t, KindSwapChange, changes[0].Kind)
+}
+
+func TestComputeAllChanges_SwapUnchanged(t *testing.T) {
+	s := func(v string) *string { return &v }
+	cases := []struct {
+		name     string
+		old, new *string
+	}{
+		{"bothNil", nil, nil},
+		{"sameString", s("50%"), s("50%")},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			old := schema.Config{Project: schema.Project{Name: "p"}, Swap: tc.old}
+			new := schema.Config{Project: schema.Project{Name: "p"}, Swap: tc.new}
+			changes, err := ComputeAllChanges(old, new, t.TempDir(), t.TempDir(), nil, nil, nil, "", "")
+			require.NoError(t, err)
+			for _, ch := range changes {
+				assert.NotEqual(t, KindSwapChange, ch.Kind, "unexpected KindSwapChange")
+			}
+		})
+	}
+}
+
+func TestComputeAllChanges_DockerBuildCacheChange(t *testing.T) {
+	s := func(v string) *string { return &v }
+	old := schema.Config{
+		Project: schema.Project{Name: "p"},
+		Docker:  &schema.DockerConfig{Enabled: true},
+	}
+	new := schema.Config{
+		Project: schema.Project{Name: "p"},
+		Docker:  &schema.DockerConfig{Enabled: true, BuildCache: s("6G")},
+	}
+	changes, err := ComputeAllChanges(old, new, t.TempDir(), t.TempDir(), nil, nil, nil, "", "")
+	require.NoError(t, err)
+	require.Len(t, changes, 1)
+	assert.Equal(t, KindDockerBuildCacheChange, changes[0].Kind)
+	assert.Equal(t, BucketRestartVM, changes[0].Bucket())
+}
+
+func TestComputeAllChanges_DockerEnabledToggle(t *testing.T) {
+	old := schema.Config{
+		Project: schema.Project{Name: "p"},
+		Docker:  &schema.DockerConfig{Enabled: true},
+	}
+	new := schema.Config{
+		Project: schema.Project{Name: "p"},
+		Docker:  &schema.DockerConfig{Enabled: false},
+	}
+	changes, err := ComputeAllChanges(old, new, t.TempDir(), t.TempDir(), nil, nil, nil, "", "")
+	require.NoError(t, err)
+	require.Len(t, changes, 1)
+	assert.Equal(t, KindDockerEnabledChange, changes[0].Kind)
+	assert.Equal(t, BucketTeardownVM, changes[0].Bucket())
+}
+
+func TestComputeAllChanges_DockerNilToEnabled(t *testing.T) {
+	old := schema.Config{Project: schema.Project{Name: "p"}}
+	new := schema.Config{
+		Project: schema.Project{Name: "p"},
+		Docker:  &schema.DockerConfig{Enabled: true},
+	}
+	changes, err := ComputeAllChanges(old, new, t.TempDir(), t.TempDir(), nil, nil, nil, "", "")
+	require.NoError(t, err)
+	require.Len(t, changes, 1)
+	assert.Equal(t, KindDockerEnabledChange, changes[0].Kind)
+	assert.Equal(t, BucketTeardownVM, changes[0].Bucket())
+}
+
+func TestComputeAllChanges_NoOp(t *testing.T) {
+	cfg := schema.Config{
+		Project: schema.Project{Name: "p"},
+		Services: schema.OrderedMapOf(map[string]schema.Service{
+			"api": {Port: 8080, Env: map[string]schema.EnvValue{"X": {Literal: "y"}}},
+		}),
+		Network: schema.Network{Allow: []schema.AllowEntry{{Host: "a.com"}}},
+	}
+	changes, err := ComputeAllChanges(cfg, cfg, t.TempDir(), t.TempDir(), nil, nil, nil, "", "")
+	require.NoError(t, err)
+	assert.Empty(t, changes)
+}
+
+func TestRecreateFlavorPickMax(t *testing.T) {
+	// No changes → live only
+	assert.Equal(t, FlavorLiveOnly, RecreateFlavor(nil))
+	assert.Equal(t, FlavorLiveOnly, RecreateFlavor([]Change{{Kind: KindPortAdd}}))
+
+	// Any teardown wins
+	assert.Equal(t, FlavorTeardownVM, RecreateFlavor([]Change{
+		{Kind: KindPortAdd},
+		{Kind: KindImageChange},
+	}))
+	// Single teardown change alone also picks teardown.
+	assert.Equal(t, FlavorTeardownVM, RecreateFlavor([]Change{
+		{Kind: KindImageChange},
+	}))
+
+	// BucketRestartVM (KindMemoryChange) alone picks FlavorRestartVM —
+	// VM stop + cold start, no teardown.
+	assert.Equal(t, FlavorRestartVM, RecreateFlavor([]Change{
+		{Kind: KindMemoryChange},
+	}))
+	// A teardown change alongside a restart change still wins — can't
+	// go higher than teardown.
+	assert.Equal(t, FlavorTeardownVM, RecreateFlavor([]Change{
+		{Kind: KindMemoryChange},
+		{Kind: KindImageChange},
+	}))
+}
+
+func TestKindTemplateChange_BucketIsLive(t *testing.T) {
+	assert.Equal(t, BucketLive, KindTemplateChange.Bucket())
+}
+
+func TestComputeTemplateChanges_NewTemplate(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "foo.tmpl"), []byte("x {{.Project.Name}}\n"), 0o644))
+
+	cfg := schema.Config{
+		Project: schema.Project{Name: "p"},
+		Services: schema.OrderedMapOf(map[string]schema.Service{
+			"a": {Port: 1, Templates: []schema.Template{{Source: "foo.tmpl", Output: "/etc/foo"}}},
+		}),
+	}
+	// No last-applied baseline at all → surfaces as new.
+	got, err := ComputeTemplateChanges(cfg, dir, t.TempDir(), nil)
+	require.NoError(t, err)
+	require.Len(t, got, 1)
+	assert.Equal(t, KindTemplateChange, got[0].Kind)
+	assert.Equal(t, "a", got[0].Service)
+	assert.Equal(t, "/etc/foo", got[0].Detail)
+	assert.Equal(t, "", got[0].Old) // new, not removed
+}
+
+func TestComputeTemplateChanges_NoChanges(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "foo.tmpl"), []byte("x {{.Project.Name}}\n"), 0o644))
+
+	cfg := schema.Config{
+		Project: schema.Project{Name: "p"},
+		Services: schema.OrderedMapOf(map[string]schema.Service{
+			"a": {Port: 1, Templates: []schema.Template{{Source: "foo.tmpl", Output: "/etc/foo"}}},
+		}),
+	}
+	// Baseline == what cfg renders right now → no diff.
+	baseline, err := render.RenderTemplatesByBasename(cfg, dir, t.TempDir(), cfg.Project.Name)
+	require.NoError(t, err)
+
+	got, err := ComputeTemplateChanges(cfg, dir, t.TempDir(), baseline)
+	require.NoError(t, err)
+	assert.Empty(t, got)
+}
+
+// TestComputeTemplateChanges_ContentChanged_SurfacesAsChangeNotAdd pins the
+// test_20 regression: the last-applied baseline lives in the daemon
+// snapshot (StateSnapshot.TemplateContents), not on the workspace's
+// .devm/templates/ — nothing writes there in production. Mutating the
+// template *source* after the baseline was captured must surface as a
+// "~" change, not a "+" add, even though nothing on disk under
+// .devm/templates/ ever existed to compare against.
+func TestComputeTemplateChanges_ContentChanged_SurfacesAsChangeNotAdd(t *testing.T) {
+	dir := t.TempDir()
+	src := filepath.Join(dir, "foo.tmpl")
+	require.NoError(t, os.WriteFile(src, []byte("v1 {{.Project.Name}}\n"), 0o644))
+
+	cfg := schema.Config{
+		Project: schema.Project{Name: "p"},
+		Services: schema.OrderedMapOf(map[string]schema.Service{
+			"a": {Port: 1, Templates: []schema.Template{{Source: "foo.tmpl", Output: "/etc/foo"}}},
+		}),
+	}
+	// Capture the baseline the way a snapshot write would (cold-start or
+	// post-apply reconcile), THEN mutate the source file — simulating a
+	// devm.yaml/template edit between snapshot capture and the next
+	// reconcile.
+	baseline, err := render.RenderTemplatesByBasename(cfg, dir, t.TempDir(), cfg.Project.Name)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(src, []byte("v2 {{.Project.Name}}\n"), 0o644))
+
+	got, err := ComputeTemplateChanges(cfg, dir, t.TempDir(), baseline)
+	require.NoError(t, err)
+	require.Len(t, got, 1)
+	assert.Equal(t, KindTemplateChange, got[0].Kind)
+	assert.Equal(t, "a", got[0].Service)
+	assert.Equal(t, "/etc/foo", got[0].Detail)
+	// Change, not add: Old and New both set → formatChange renders "~",
+	// not "+" (see internal/orchestrator/format.go's KindTemplateChange case).
+	assert.NotEmpty(t, got[0].Old)
+	assert.NotEmpty(t, got[0].New)
+}
+
+func TestComputeTemplateChanges_Removed(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "foo.tmpl"), []byte("x"), 0o644))
+
+	cfg1 := schema.Config{
+		Project: schema.Project{Name: "p"},
+		Services: schema.OrderedMapOf(map[string]schema.Service{
+			"a": {Port: 1, Templates: []schema.Template{{Source: "foo.tmpl", Output: "/etc/foo"}}},
+		}),
+	}
+	baseline, err := render.RenderTemplatesByBasename(cfg1, dir, t.TempDir(), cfg1.Project.Name)
+	require.NoError(t, err)
+
+	// New config drops the template.
+	cfg2 := schema.Config{
+		Project:  cfg1.Project,
+		Services: schema.OrderedMapOf(map[string]schema.Service{"a": {Port: 1}}),
+	}
+	got, err := ComputeTemplateChanges(cfg2, dir, t.TempDir(), baseline)
+	require.NoError(t, err)
+	require.Len(t, got, 1)
+	assert.Equal(t, KindTemplateChange, got[0].Kind)
+	// Removal: Old set, New empty, Detail names the output.
+	assert.NotEmpty(t, got[0].Old)
+}
+
+func TestComputeAllChanges_IncludesTemplates(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "foo.tmpl"),
+		[]byte("hello {{.Project.Name}}\n"), 0o644))
+
+	cfg := schema.Config{
+		Project: schema.Project{Name: "p"},
+		Services: schema.OrderedMapOf(map[string]schema.Service{
+			"a": {Port: 1, Templates: []schema.Template{{Source: "foo.tmpl", Output: "/etc/foo"}}},
+		}),
+	}
+	changes, err := ComputeAllChanges(schema.Config{}, cfg, dir, t.TempDir(), nil, nil, nil, "", "")
+	require.NoError(t, err)
+	found := false
+	for _, c := range changes {
+		if c.Kind == KindTemplateChange {
+			found = true
+		}
+	}
+	assert.True(t, found, "expected KindTemplateChange in ComputeAllChanges output")
+}
+
+func TestBucketEgressRestartString(t *testing.T) {
+	assert.Equal(t, "egress-restart", BucketEgressRestart.String())
+}
+
+func TestNetworkKindsAreLiveSecretKindsAreEgressRestart(t *testing.T) {
+	assert.Equal(t, BucketLive, KindNetworkAdd.Bucket())
+	assert.Equal(t, BucketLive, KindNetworkRemove.Bucket())
+	assert.Equal(t, BucketEgressRestart, KindSecretAdd.Bucket())
+	assert.Equal(t, BucketEgressRestart, KindSecretRemove.Bucket())
+	assert.Equal(t, BucketEgressRestart, KindSecretChange.Bucket())
+}
+
+func TestComputeNetworkChanges_AddsAndRemoves(t *testing.T) {
+	// Interleaved hosts to verify sort.SliceStable actually reorders results.
+	// Raw emission order (adds then removes): aaa.com, zzz2.com, zzz.com, aaa2.com
+	// Expected sorted order: aaa.com (Add), aaa2.com (Remove), zzz.com (Remove), zzz2.com (Add)
+	old := schema.Config{Network: schema.Network{Allow: []schema.AllowEntry{
+		{Host: "zzz.com"},
+		{Host: "aaa2.com"},
+	}}}
+	new := schema.Config{Network: schema.Network{Allow: []schema.AllowEntry{
+		{Host: "aaa.com"},
+		{Host: "zzz2.com"},
+	}}}
+	got := computeNetworkChanges(old, new)
+	require.Len(t, got, 4)
+
+	// Verify sorted by Key, then by Kind (Add < Remove for same key).
+	// Entry 0: aaa.com (Add)
+	assert.Equal(t, "aaa.com", got[0].Key)
+	assert.Equal(t, KindNetworkAdd, got[0].Kind)
+	assert.Equal(t, "aaa.com", got[0].New)
+
+	// Entry 1: aaa2.com (Remove)
+	assert.Equal(t, "aaa2.com", got[1].Key)
+	assert.Equal(t, KindNetworkRemove, got[1].Kind)
+	assert.Equal(t, "aaa2.com", got[1].Old)
+
+	// Entry 2: zzz.com (Remove)
+	assert.Equal(t, "zzz.com", got[2].Key)
+	assert.Equal(t, KindNetworkRemove, got[2].Kind)
+	assert.Equal(t, "zzz.com", got[2].Old)
+
+	// Entry 3: zzz2.com (Add)
+	assert.Equal(t, "zzz2.com", got[3].Key)
+	assert.Equal(t, KindNetworkAdd, got[3].Kind)
+	assert.Equal(t, "zzz2.com", got[3].New)
+}
+
+func TestComputeNetworkChanges_NoChange(t *testing.T) {
+	cfg := schema.Config{Network: schema.Network{Allow: []schema.AllowEntry{{Host: "a.com"}}}}
+	assert.Nil(t, computeNetworkChanges(cfg, cfg))
+}
+
+func TestComputeSecretChanges_AllThreeShapes(t *testing.T) {
+	old := map[string]string{
+		"KEEP_SAME":   "hash_a",
+		"WILL_CHANGE": "hash_b_old",
+		"WILL_REMOVE": "hash_c",
+	}
+	new := map[string]string{
+		"KEEP_SAME":   "hash_a",
+		"WILL_CHANGE": "hash_b_new",
+		"WILL_ADD":    "hash_d",
+	}
+	got := computeSecretChanges(new, old)
+	require.Len(t, got, 3)
+
+	assert.Equal(t, KindSecretAdd, got[0].Kind)
+	assert.Equal(t, "WILL_ADD", got[0].Key)
+
+	assert.Equal(t, KindSecretChange, got[1].Kind)
+	assert.Equal(t, "WILL_CHANGE", got[1].Key)
+
+	assert.Equal(t, KindSecretRemove, got[2].Kind)
+	assert.Equal(t, "WILL_REMOVE", got[2].Key)
+}
+
+func TestComputeSecretChanges_Empty(t *testing.T) {
+	assert.Nil(t, computeSecretChanges(nil, nil))
+	assert.Nil(t, computeSecretChanges(map[string]string{"X": "h"}, map[string]string{"X": "h"}))
+}
+
+func TestComputeAllChanges_IncludesNetworkAndSecretChanges(t *testing.T) {
+	old := schema.Config{
+		Project: schema.Project{Name: "p"},
+		Network: schema.Network{Allow: []schema.AllowEntry{{Host: "a.com"}}},
+	}
+	new := schema.Config{
+		Project: schema.Project{Name: "p"},
+		Network: schema.Network{Allow: []schema.AllowEntry{{Host: "a.com"}, {Host: "b.com"}}},
+	}
+	oldHashes := map[string]string{"TOK": "h_old"}
+	newHashes := map[string]string{"TOK": "h_new"}
+	changes, err := ComputeAllChanges(old, new, "", t.TempDir(), nil, oldHashes, newHashes, "", "")
+	require.NoError(t, err)
+	// Exactly one network add + one secret change (both other diffs empty).
+	require.Len(t, changes, 2)
+	kinds := []ChangeKind{changes[0].Kind, changes[1].Kind}
+	assert.Contains(t, kinds, KindNetworkAdd)
+	assert.Contains(t, kinds, KindSecretChange)
+}
+
+func TestComputeDiskChange(t *testing.T) {
+	mk := func(disk string) schema.Config {
+		cfg := schema.Config{Project: schema.Project{Name: "x"}}
+		if disk != "" {
+			cfg.Disk = &disk
+		}
+		return cfg
+	}
+	// unset -> unset: no change
+	assert.Empty(t, computeDiskChange(mk(""), mk("")))
+	// unset (effective 32) -> explicit 32: no change
+	assert.Empty(t, computeDiskChange(mk(""), mk("32G")))
+	// unset -> 64: change, teardown
+	ch := computeDiskChange(mk(""), mk("64G"))
+	require.Len(t, ch, 1)
+	assert.Equal(t, KindDiskChange, ch[0].Kind)
+	assert.Equal(t, "32G", ch[0].Old)
+	assert.Equal(t, "64G", ch[0].New)
+	assert.Equal(t, BucketTeardownVM, ch[0].Bucket())
+	// 64 -> 100: change
+	assert.Len(t, computeDiskChange(mk("64G"), mk("100G")), 1)
+	// 64 -> 64: no change
+	assert.Empty(t, computeDiskChange(mk("64G"), mk("64G")))
+}
+
+func TestDiskChangeKindBucket(t *testing.T) {
+	assert.Equal(t, BucketTeardownVM, KindDiskChange.Bucket())
+}
+
+func TestIronProxyDownKindBucket(t *testing.T) {
+	assert.Equal(t, BucketEgressRestart, KindIronProxyDown.Bucket())
+}
+
+func TestComputeResourceChange_Memory(t *testing.T) {
+	s := func(v string) *string { return &v }
+	cases := []struct {
+		name       string
+		old, new   *string
+		expectKind bool
+	}{
+		{"nil→nil", nil, nil, false},
+		{"nil→8G", nil, s("8G"), true},
+		{"8G→nil", s("8G"), nil, true},
+		{"8G→16G", s("8G"), s("16G"), true},
+		{"8G→8G", s("8G"), s("8G"), false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			old := schema.Config{Memory: tc.old}
+			new := schema.Config{Memory: tc.new}
+			out := computeResourceChange(old, new)
+			hasMemChange := false
+			for _, ch := range out {
+				if ch.Kind == KindMemoryChange {
+					hasMemChange = true
+				}
+			}
+			assert.Equal(t, tc.expectKind, hasMemChange)
+		})
+	}
+}
+
+func TestComputeResourceChange_Cpu(t *testing.T) {
+	i := func(v int) *int { return &v }
+	cases := []struct {
+		name       string
+		old, new   *int
+		expectKind bool
+	}{
+		{"nil→nil", nil, nil, false},
+		{"nil→6", nil, i(6), true},
+		{"6→nil", i(6), nil, true},
+		{"6→8", i(6), i(8), true},
+		{"6→6", i(6), i(6), false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			old := schema.Config{Cpu: tc.old}
+			new := schema.Config{Cpu: tc.new}
+			out := computeResourceChange(old, new)
+			hasCpuChange := false
+			for _, ch := range out {
+				if ch.Kind == KindCpuChange {
+					hasCpuChange = true
+				}
+			}
+			assert.Equal(t, tc.expectKind, hasCpuChange)
+		})
+	}
+}
+
+func TestComputeResourceChange_BothTogether(t *testing.T) {
+	s := func(v string) *string { return &v }
+	i := func(v int) *int { return &v }
+	old := schema.Config{Memory: nil, Cpu: nil}
+	new := schema.Config{Memory: s("8G"), Cpu: i(6)}
+	out := computeResourceChange(old, new)
+	kinds := make(map[ChangeKind]bool)
+	for _, ch := range out {
+		kinds[ch.Kind] = true
+	}
+	assert.True(t, kinds[KindMemoryChange], "expected KindMemoryChange")
+	assert.True(t, kinds[KindCpuChange], "expected KindCpuChange")
+}
+
+func TestKindMemoryChange_BucketRestartVM(t *testing.T) {
+	assert.Equal(t, BucketRestartVM, KindMemoryChange.Bucket())
+}
+
+func TestKindCpuChange_BucketRestartVM(t *testing.T) {
+	assert.Equal(t, BucketRestartVM, KindCpuChange.Bucket())
+}
+
+func TestComputeAllChanges_EmitsBundleRefreshWhenFingerprintDrifted(t *testing.T) {
+	cfg := schema.Config{Project: schema.Project{Name: "p"}}
+	changes, err := ComputeAllChanges(
+		cfg, cfg, "/tmp/repo", "/tmp/rt",
+		nil, nil, nil,
+		"old-fp", "current-fp",
+	)
+	require.NoError(t, err)
+
+	saw := false
+	for _, c := range changes {
+		if c.Kind == KindBundleRefresh {
+			saw = true
+		}
+	}
+	assert.True(t, saw, "fingerprint drift must emit KindBundleRefresh")
+}
+
+func TestComputeAllChanges_EmptyStoredFingerprintEmitsBundleRefresh(t *testing.T) {
+	// A completely empty stored fingerprint (fresh cold-start seed missing,
+	// or an old daemon that never stamped one) must still emit KindBundleRefresh
+	// against a non-empty current — so the first reconcile after this batch
+	// stamps the fingerprint for the first time. Regression guard against a
+	// future "empty means unset, don't drift-detect" special-case.
+	cfg := schema.Config{Project: schema.Project{Name: "p"}}
+	changes, err := ComputeAllChanges(
+		cfg, cfg, "/tmp/repo", "/tmp/rt",
+		nil, nil, nil,
+		"",           // storedBundleFingerprint EMPTY
+		"current-fp", // currentBundleFingerprint non-empty
+	)
+	require.NoError(t, err)
+
+	saw := false
+	for _, c := range changes {
+		if c.Kind == KindBundleRefresh {
+			saw = true
+		}
+	}
+	assert.True(t, saw, "empty stored fingerprint must still emit KindBundleRefresh")
+}
+
+func TestComputeAllChanges_NoBundleRefreshWhenFingerprintsMatch(t *testing.T) {
+	cfg := schema.Config{Project: schema.Project{Name: "p"}}
+	changes, err := ComputeAllChanges(
+		cfg, cfg, "/tmp/repo", "/tmp/rt",
+		nil, nil, nil,
+		"same-fp", "same-fp",
+	)
+	require.NoError(t, err)
+
+	for _, c := range changes {
+		assert.NotEqual(t, KindBundleRefresh, c.Kind,
+			"matching fingerprints must NOT emit KindBundleRefresh")
+	}
+}
+
+func TestComputeAllChanges_NoBundleRefreshWhenCurrentFingerprintEmpty(t *testing.T) {
+	// Callers who don't want bundle-drift detection (e.g. devm status)
+	// pass "" — the check must be silent, not emit spurious change.
+	cfg := schema.Config{Project: schema.Project{Name: "p"}}
+	changes, err := ComputeAllChanges(
+		cfg, cfg, "/tmp/repo", "/tmp/rt",
+		nil, nil, nil,
+		"something", "",
+	)
+	require.NoError(t, err)
+
+	for _, c := range changes {
+		assert.NotEqual(t, KindBundleRefresh, c.Kind)
+	}
+}
+
+func TestChangeBucket_BundleRefreshIsLive(t *testing.T) {
+	assert.Equal(t, BucketLive, Change{Kind: KindBundleRefresh}.Bucket())
+}
+
+// snapshotsCfg builds a schema.Config with a "p" project and the given
+// snapshots map, avoiding yaml round-trip and Validate — the diff layer
+// never runs either and the tests only care about field-value diffs.
+func snapshotsCfg(snaps map[string]schema.Snapshot) schema.Config {
+	return schema.Config{
+		Project:   schema.Project{Name: "p"},
+		Snapshots: schema.OrderedMapOf(snaps),
+	}
+}
+
+func TestComputeAllChanges_SnapshotAdd(t *testing.T) {
+	cron := "0 3 * * *"
+	keep := 7
+	old := schema.Config{Project: schema.Project{Name: "p"}}
+	new := snapshotsCfg(map[string]schema.Snapshot{
+		"pg": {Cron: &cron, Keep: &keep},
+	})
+	changes, err := ComputeAllChanges(old, new, t.TempDir(), t.TempDir(), nil, nil, nil, "", "")
+	require.NoError(t, err)
+	require.Len(t, changes, 1)
+	assert.Equal(t, KindSnapshotEntryAdd, changes[0].Kind)
+	assert.Equal(t, "pg", changes[0].Key)
+	assert.Equal(t, BucketRestartVM, changes[0].Bucket())
+}
+
+func TestComputeAllChanges_SnapshotRemove(t *testing.T) {
+	cron := "0 3 * * *"
+	keep := 7
+	old := snapshotsCfg(map[string]schema.Snapshot{
+		"pg": {Cron: &cron, Keep: &keep},
+	})
+	new := schema.Config{Project: schema.Project{Name: "p"}}
+	changes, err := ComputeAllChanges(old, new, t.TempDir(), t.TempDir(), nil, nil, nil, "", "")
+	require.NoError(t, err)
+	require.Len(t, changes, 1)
+	assert.Equal(t, KindSnapshotEntryRemove, changes[0].Kind)
+	assert.Equal(t, "pg", changes[0].Key)
+	assert.Equal(t, BucketRestartVM, changes[0].Bucket())
+}
+
+func TestComputeAllChanges_SnapshotCronChanged(t *testing.T) {
+	cron1 := "0 3 * * *"
+	cron2 := "0 4 * * *"
+	keep := 7
+	old := snapshotsCfg(map[string]schema.Snapshot{
+		"pg": {Cron: &cron1, Keep: &keep},
+	})
+	new := snapshotsCfg(map[string]schema.Snapshot{
+		"pg": {Cron: &cron2, Keep: &keep},
+	})
+	changes, err := ComputeAllChanges(old, new, t.TempDir(), t.TempDir(), nil, nil, nil, "", "")
+	require.NoError(t, err)
+	require.Len(t, changes, 1)
+	assert.Equal(t, KindSnapshotEntryChange, changes[0].Kind)
+	assert.Equal(t, "pg", changes[0].Key)
+	assert.Equal(t, BucketRestartVM, changes[0].Bucket())
+}
+
+func TestComputeAllChanges_SnapshotKeepChanged(t *testing.T) {
+	cron := "0 3 * * *"
+	keep1 := 7
+	keep2 := 14
+	old := snapshotsCfg(map[string]schema.Snapshot{
+		"pg": {Cron: &cron, Keep: &keep1},
+	})
+	new := snapshotsCfg(map[string]schema.Snapshot{
+		"pg": {Cron: &cron, Keep: &keep2},
+	})
+	changes, err := ComputeAllChanges(old, new, t.TempDir(), t.TempDir(), nil, nil, nil, "", "")
+	require.NoError(t, err)
+	require.Len(t, changes, 1)
+	assert.Equal(t, KindSnapshotEntryChange, changes[0].Kind)
+	assert.Equal(t, "pg", changes[0].Key)
+	assert.Equal(t, BucketRestartVM, changes[0].Bucket())
+}
+
+func TestSnapshotChangesAllRestartBucket(t *testing.T) {
+	assert.Equal(t, BucketRestartVM, KindSnapshotEntryAdd.Bucket())
+	assert.Equal(t, BucketRestartVM, KindSnapshotEntryRemove.Bucket())
+	assert.Equal(t, BucketRestartVM, KindSnapshotEntryChange.Bucket())
+}
+
+// TestComputeAllChanges_SnapshotFieldDeltas walks every pointer field
+// on Snapshot — a change on any one of them, with the other four held
+// identical to the old side, must surface as exactly one
+// KindSnapshotEntryChange. Locks snapshotEqual's field coverage so
+// dropping any field from the equality check would fail here.
+func TestComputeAllChanges_SnapshotFieldDeltas(t *testing.T) {
+	s := func(v string) *string { return &v }
+	i := func(v int) *int { return &v }
+	b := func(v bool) *bool { return &v }
+
+	// Fully-populated baseline so each case can flip one field.
+	base := schema.Snapshot{
+		Path:       s("/home/devm/.claude"),
+		Cron:       s("0 3 * * *"),
+		Keep:       i(7),
+		OnStop:     b(true),
+		OnTeardown: b(false),
+		Timeout:    &schema.SnapshotTimeout{Pre: s("30s"), Step: s("90s"), Post: s("30s")},
+	}
+
+	cases := []struct {
+		name   string
+		mutate func(s *schema.Snapshot)
+	}{
+		{"Path", func(s *schema.Snapshot) { v := "/home/devm/.config"; s.Path = &v }},
+		{"Cron", func(s *schema.Snapshot) { v := "0 4 * * *"; s.Cron = &v }},
+		{"Keep", func(s *schema.Snapshot) { v := *base.Keep + 1; s.Keep = &v }},
+		{"OnStop", func(s *schema.Snapshot) { v := !*base.OnStop; s.OnStop = &v }},
+		{"OnTeardown", func(s *schema.Snapshot) { v := !*base.OnTeardown; s.OnTeardown = &v }},
+		{"TimeoutPre", func(s *schema.Snapshot) {
+			v := "45s"
+			s.Timeout = &schema.SnapshotTimeout{Pre: &v, Step: base.Timeout.Step, Post: base.Timeout.Post}
+		}},
+		{"TimeoutStep", func(s *schema.Snapshot) {
+			v := "5m"
+			s.Timeout = &schema.SnapshotTimeout{Pre: base.Timeout.Pre, Step: &v, Post: base.Timeout.Post}
+		}},
+		{"TimeoutPost", func(s *schema.Snapshot) {
+			v := "45s"
+			s.Timeout = &schema.SnapshotTimeout{Pre: base.Timeout.Pre, Step: base.Timeout.Step, Post: &v}
+		}},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			// Deep-ish copy of base so mutating one case's pointers
+			// doesn't bleed into the next.
+			newSnap := schema.Snapshot{
+				Path:       s(*base.Path),
+				Cron:       s(*base.Cron),
+				Keep:       i(*base.Keep),
+				OnStop:     b(*base.OnStop),
+				OnTeardown: b(*base.OnTeardown),
+				Timeout: &schema.SnapshotTimeout{
+					Pre:  s(*base.Timeout.Pre),
+					Step: s(*base.Timeout.Step),
+					Post: s(*base.Timeout.Post),
+				},
+			}
+			tc.mutate(&newSnap)
+
+			old := snapshotsCfg(map[string]schema.Snapshot{"pg": base})
+			new := snapshotsCfg(map[string]schema.Snapshot{"pg": newSnap})
+			changes, err := ComputeAllChanges(old, new, t.TempDir(), t.TempDir(), nil, nil, nil, "", "")
+			require.NoError(t, err)
+			require.Len(t, changes, 1, "field %s: expected exactly one change", tc.name)
+			assert.Equal(t, KindSnapshotEntryChange, changes[0].Kind)
+			assert.Equal(t, "pg", changes[0].Key)
+		})
+	}
+}

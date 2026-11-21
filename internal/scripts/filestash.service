@@ -1,0 +1,17 @@
+[Unit]
+Description=devm filestash file browser
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=devm
+WorkingDirectory=/home/devm/filestash
+ExecStart=/home/devm/filestash/filestash
+Restart=on-failure
+RestartSec=2s
+StandardOutput=append:/home/devm/filestash/filestash.log
+StandardError=append:/home/devm/filestash/filestash.log
+
+[Install]
+WantedBy=multi-user.target

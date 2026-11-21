@@ -1,0 +1,115 @@
+package config
+
+import "github.com/mdubb86/devm/internal/schema"
+
+// Merge applies override on top of base. Only non-nil/non-empty fields in
+// override take effect. Returns a new Config.
+func Merge(base schema.Config, override schema.ConfigOverride) (schema.Config, error) {
+	out := base
+	if override.Project != nil {
+		if override.Project.Name != nil {
+			out.Project.Name = *override.Project.Name
+		}
+	}
+	if override.Docker != nil {
+		d := *override.Docker
+		out.Docker = &d
+	}
+	if override.Network != nil {
+		if override.Network.Allow != nil {
+			out.Network.Allow = *override.Network.Allow
+		}
+	}
+	if override.Cron != nil {
+		cron := make(map[string]string, len(base.Cron)+len(override.Cron))
+		for k, v := range base.Cron {
+			cron[k] = v
+		}
+		for k, v := range override.Cron {
+			cron[k] = v
+		}
+		out.Cron = cron
+	}
+	if override.Env != nil {
+		if out.Env == nil {
+			out.Env = map[string]schema.EnvValue{}
+		}
+		for k, v := range override.Env {
+			out.Env[k] = v
+		}
+	}
+	if override.Services != nil {
+		for name, soverride := range override.Services {
+			svc, _ := out.Services.Get(name)
+			if soverride.PortIsSet {
+				if soverride.Port != nil {
+					svc.Port = *soverride.Port
+				}
+				if soverride.BindIP != nil {
+					svc.BindIP = *soverride.BindIP
+				} else {
+					svc.BindIP = ""
+				}
+			}
+			if soverride.Hostname != nil {
+				svc.Hostname = *soverride.Hostname
+			}
+			if soverride.Direct != nil {
+				svc.Direct = *soverride.Direct
+			}
+			if soverride.ExposeHost != nil {
+				svc.ExposeHost = *soverride.ExposeHost
+			}
+			if soverride.Env != nil {
+				if svc.Env == nil {
+					svc.Env = map[string]schema.EnvValue{}
+				}
+				for k, v := range soverride.Env {
+					svc.Env[k] = v
+				}
+			}
+			if soverride.Templates != nil {
+				svc.Templates = *soverride.Templates
+			}
+			if soverride.ExecFunc != nil {
+				svc.ExecFunc = *soverride.ExecFunc
+				svc.ExecArgv = nil
+			}
+			if soverride.ExecArgv != nil {
+				svc.ExecArgv = *soverride.ExecArgv
+				svc.ExecFunc = ""
+			}
+			if soverride.WorkDir != nil {
+				svc.WorkDir = *soverride.WorkDir
+			}
+			if soverride.Restart != nil {
+				svc.Restart = *soverride.Restart
+			}
+			if soverride.After != nil {
+				svc.After = *soverride.After
+			}
+			if soverride.User != nil {
+				svc.User = *soverride.User
+			}
+			if soverride.Systemd != nil {
+				svc.Systemd = *soverride.Systemd
+			}
+			out.Services.Set(name, svc)
+		}
+	}
+	if override.Path != nil {
+		out.Path = *override.Path
+	}
+	if override.Packages != nil {
+		out.Packages = *override.Packages
+	}
+	if override.Disk != nil {
+		v := *override.Disk
+		out.Disk = &v
+	}
+	if override.Swap != nil {
+		v := *override.Swap
+		out.Swap = &v
+	}
+	return out, nil
+}

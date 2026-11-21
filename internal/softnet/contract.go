@@ -1,0 +1,129 @@
+// internal/softnet/contract.go
+package softnet
+
+import "fmt"
+
+// Network constants — match gvproxy defaults and the contract fixture.
+const (
+	SubnetCIDR = "192.168.127.0/24"
+	GatewayIP  = "192.168.127.1"
+	GatewayMAC = "5a:94:ef:e4:0c:dd"
+	NATAliasIP = "192.168.127.254" // NATs to the host's 127.0.0.1
+	HostLoopIP = "127.0.0.1"
+	MTU        = 1500
+	// GuestLeaseIP is the deterministic first DHCP lease handed to the sole
+	// guest (.1 is the gateway). Ingress dials this; egress does not need it.
+	GuestLeaseIP = "192.168.127.2"
+
+	// InterceptedTestIP is the hairpin address softnet's own DNS answers for
+	// every non-direct `*.test` name. The egress forwarder matches it by
+	// destination IP and dials the daemon's guest-origin listener, which
+	// terminates TLS with the devm CA and dials back into the guest. RFC 5737
+	// documentation space, so it can never collide with a real destination.
+	// Never appears in guest config — the guest learns it only via DNS.
+	InterceptedTestIP = "192.0.2.2"
+)
+
+// Policy is softnet's coarse egress state, set by the daemon.
+type Policy int
+
+const (
+	PolicyLocked     Policy = iota // drop all egress (boot lock; pre-CA-install window)
+	PolicyForwarding               // route :80/:443 → iron-proxy, :53 → iron-proxy DNS, :123 → iron-proxy NTP; other ports dropped
+)
+
+func (p Policy) String() string {
+	switch p {
+	case PolicyLocked:
+		return "LOCKED"
+	case PolicyForwarding:
+		return "FORWARDING"
+	default:
+		return fmt.Sprintf("Policy(%d)", int(p))
+	}
+}
+
+func ParsePolicy(s string) (Policy, error) {
+	switch s {
+	case "LOCKED":
+		return PolicyLocked, nil
+	case "FORWARDING":
+		return PolicyForwarding, nil
+	default:
+		return 0, fmt.Errorf("unknown policy %q", s)
+	}
+}
+
+// ForwardTargets is where softnet forwards guest-originated TCP. Each field is
+// a host:port on the Mac. HTTP/HTTPS/DNS/NTP are the egress path (iron-proxy
+// and devm's SNTP responder); GuestHTTP/GuestHTTPS are the daemon's
+// guest-origin listener, which loops `.test` traffic back into this project's
+// own services.
+type ForwardTargets struct {
+	HTTP  string `json:"http"`
+	HTTPS string `json:"https"`
+	DNS   string `json:"dns"`
+	NTP   string `json:"ntp"`
+
+	GuestHTTP  string `json:"guest_http,omitempty"`
+	GuestHTTPS string `json:"guest_https,omitempty"`
+
+	// GuestAPI is the Mac-side host:port where softnet forwards guest
+	// TCP traffic destined for 192.168.127.1:81. One per-project HTTP
+	// listener on the Mac serves every guest-originated daemon-API
+	// call under one mux: /pop, /propose, /passthrough, /refresh-bundle,
+	// /recipes/*. The in-guest `gdevm` CLI is the sole client.
+	//
+	// Omitted from setPolicy payloads when unset (projects whose
+	// listener couldn't be bound).
+	GuestAPI string `json:"guest_api,omitempty"`
+
+	// MacPorts is the set of Mac loopback ports this VM is allowed to
+	// reach. Consumed by softnet's egress forwarder; absent / empty
+	// means no mac_services declared.
+	MacPorts []int `json:"mac_ports,omitempty"`
+
+	// PeerHairpins maps a peer project's hostname suffix (e.g.
+	// `sibling.test`, no leading dot) to the Mac-side host:port of
+	// that peer's own guest-origin HTTPS listener. softnet does not
+	// read this field; it is consumed only by the daemon-side
+	// hairpin's SNI mux. Carried on the setPolicy envelope because
+	// that is the single push path for per-VM state.
+	PeerHairpins map[string]string `json:"peer_hairpins,omitempty"`
+}
+
+// ExposePort is one host->guest ingress mapping.
+type ExposePort struct {
+	GuestPort int    `json:"guest_port"`
+	BindIP    string `json:"bind_ip"`
+	HostPort  int    `json:"host_port"`
+}
+
+// ExposeResult is the per-port outcome of one setExposeMap apply.
+type ExposeResult struct {
+	BindIP    string `json:"bind_ip"`
+	HostPort  int    `json:"host_port"`
+	GuestPort int    `json:"guest_port"`
+	OK        bool   `json:"ok"`
+	Error     string `json:"error,omitempty"`
+}
+
+// ExposeAck is the one-line JSON reply softnet writes back on the
+// control connection for a setExposeMap message. OK is the AND of all
+// results, so the daemon can fail loud without walking them.
+type ExposeAck struct {
+	OK      bool           `json:"ok"`
+	Results []ExposeResult `json:"results"`
+}
+
+// ControlMsg is one line of the daemon->softnet control protocol (JSON per
+// line over the unix socket). Op is "setPolicy", "setExposeMap", or
+// "setTestHosts". setExposeMap is the one op with a reply: an ExposeAck
+// line on the same connection.
+type ControlMsg struct {
+	Op              string          `json:"op"`
+	Policy          string          `json:"policy,omitempty"`
+	ForwardTargets  *ForwardTargets `json:"forward_targets,omitempty"`
+	Expose          []ExposePort    `json:"expose,omitempty"`
+	DirectTestHosts []string        `json:"direct_test_hosts,omitempty"`
+}

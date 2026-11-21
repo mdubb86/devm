@@ -1,0 +1,104 @@
+package serviceapi
+
+import (
+	"context"
+	"encoding/json"
+	"net/http"
+	"sort"
+
+	"github.com/mdubb86/devm/internal/identity"
+)
+
+// ProjectStatus is one row of GET /status/all — a cross-project
+// summary combining VM running state with iron-proxy health for every
+// project the daemon has a StateCache row for. Backs `devm status
+// --all`.
+type ProjectStatus struct {
+	Name      string      `json:"name"`
+	VMRunning bool        `json:"vm_running"`
+	Proxy     ProxyHealth `json:"proxy"`
+	MacCwd    string      `json:"mac_cwd,omitempty"`
+	// ApproveState is nil when the cache has no approve-gate signal
+	// tracked for the project yet.
+	ApproveState *ApproveStateJSON `json:"approve_state,omitempty"`
+	// ProxyListenerHealth mirrors ProjectRow.ProxyListenerHealth — the
+	// watchdog's most recent per-tick verdict on whether this
+	// project's :80/:443 listener pair is actually up. `devm status`
+	// aggregates this across every running project into the top-level
+	// proxy_healthy field.
+	ProxyListenerHealth bool `json:"proxy_listener_health"`
+	// MutagenHealth mirrors ProjectRow.MutagenHealth.Status — the
+	// mutagen-monitor subscriber's real-time verdict on this project's
+	// sync sessions (see mutagen_monitor.go). MutagenStatus's
+	// underlying type is string, so this serializes as "ok"/"dead" on
+	// the wire, not a numeric enum. Empty when no verdict has been
+	// recorded yet for this project (no sync sessions ever observed).
+	MutagenHealth MutagenStatus `json:"mutagen_health,omitempty"`
+	// Orphaned marks a running VM that carries devm sidecar artifacts
+	// but no state snapshot — devm-created, daemon lost track of it
+	// (see detectOrphanVMs). Such rows have no meaningful Proxy or
+	// ProxyListenerHealth value.
+	Orphaned bool `json:"orphaned,omitempty"`
+}
+
+// ApproveStateJSON is the subset of ApproveStateSummary exposed on the
+// wire — v1 only needs the boolean; SHAs/since stay internal until a
+// consumer needs them.
+type ApproveStateJSON struct {
+	Diverged bool `json:"diverged"`
+}
+
+// RegisterStatusAllHandler wires GET /status/all. Every project row
+// comes from cache; tr supplies the running-VM set used only for
+// orphan detection (see detectOrphanVMs), which stays a live tart
+// query — an orphan is by definition a VM with no cache row. Purely a
+// read-only report — it never spawns anything.
+func RegisterStatusAllHandler(s *Server, cfg identity.Config, tr TartLister, cache *StateCache) {
+	s.Register("/status/all", func(w http.ResponseWriter, r *http.Request) {
+		out, err := projectStatusesFromCache(r.Context(), cfg, tr, cache)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(out)
+	})
+}
+
+// projectStatusesFromCache builds one ProjectStatus per cache row,
+// sorted by name for deterministic output, then appends live-detected
+// orphan VMs.
+func projectStatusesFromCache(ctx context.Context, cfg identity.Config, tr TartLister, cache *StateCache) ([]ProjectStatus, error) {
+	rows := cache.AllProjectRows()
+	out := make([]ProjectStatus, 0, len(rows))
+	for name, row := range rows {
+		var approve *ApproveStateJSON
+		// ApproveState is a value type; treat zero-value as "not tracked yet".
+		if row.ApproveState != (ApproveStateSummary{}) {
+			approve = &ApproveStateJSON{Diverged: row.ApproveState.Diverged}
+		}
+		out = append(out, ProjectStatus{
+			Name:                name,
+			VMRunning:           row.VMState == VMRunning,
+			Proxy:               row.IronProxyHealth,
+			MacCwd:              row.MacCwd,
+			ApproveState:        approve,
+			ProxyListenerHealth: row.ProxyListenerHealth,
+			MutagenHealth:       row.MutagenHealth.Status,
+		})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+
+	// Orphaned devm VMs — running, sidecar-evidenced, no cache row —
+	// get their own rows so `devm status --all` surfaces them instead
+	// of silently omitting a VM that's burning RAM and squatting pool
+	// IP binds.
+	orphans, err := detectOrphanVMs(ctx, cfg, tr)
+	if err != nil {
+		return nil, err
+	}
+	for _, name := range orphans {
+		out = append(out, ProjectStatus{Name: name, VMRunning: true, Orphaned: true})
+	}
+	return out, nil
+}

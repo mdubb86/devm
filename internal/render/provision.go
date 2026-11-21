@@ -1,0 +1,335 @@
+package render
+
+import (
+	"fmt"
+	"strings"
+
+	"github.com/mdubb86/devm/internal/docker"
+)
+
+// Guest-side paths the composed provisioning script references. These
+// mirror the devmbundle layout (GuestRoot/scripts/...), duplicated as
+// literals here because devmbundle imports render — importing it back
+// would be a cycle.
+const (
+	guestWrapper     = "/opt/devm/scripts/with-devm-env"
+	guestDispatcher  = "/opt/devm/scripts/install-templates.sh"
+	provisionedMark  = "/var/lib/devm/provisioned"
+	inProgressMarker = "/run/devm/provisioning"
+)
+
+// ProvisionScriptInput is everything the composed guest provisioning script
+// needs baked in. The daemon builds this from schema.Config, then
+// RenderProvisionBundleScript/RenderProvisionUserScript/
+// RenderProvisionEnforcedScript turn it into the three bash scripts run
+// around mutagen sync setup and the softnet ENFORCED flip.
+type ProvisionScriptInput struct {
+	FirstBoot bool
+	Packages  []string // apt packages (first boot only)
+	// InstallWrapperBody is a fully-rendered bash script the install
+	// phase executes on first boot. Empty means "no install phase to
+	// run."
+	InstallWrapperBody string
+	Docker             bool // run the docker feature (first boot only)
+	InstallTemplates   bool // run the template dispatcher (every open boot)
+	// StartupWrapperBody is a fully-rendered bash script the startup
+	// phase executes on every boot. Empty means "no startup phase to
+	// run."
+	StartupWrapperBody string
+	Services           []string // service unit names to enable+start (health-polled)
+	// CronTimers are the sorted cron function names whose timers the
+	// enforced script starts. install.sh only installs the units at boot.
+	CronTimers []string
+
+	// StepTimeoutSeconds bounds every install:/startup: command (the
+	// `timeout %d` wrapping both stages). Zero means "unset" and falls back
+	// to defaultStepTimeoutSeconds — the daemon fills this from
+	// DEVM_INSTALL_STEP_TIMEOUT_S (see provision.Provisioner), so it is only
+	// ever zero in tests that don't care about the override.
+	StepTimeoutSeconds int
+
+	// PackageAdds / PackageRemoves converge apt drift on a NON-first
+	// boot: `packages:` was edited while the VM was stopped, so the
+	// diff vs the last-applied snapshot runs here, in the boot's open
+	// window, instead of the runtime transient-egress path. First boot
+	// ignores them — it installs the full Packages list.
+	PackageAdds    []string
+	PackageRemoves []string
+
+	// GitCredentials is the pre-rendered body of /home/devm/.git-credentials,
+	// one URL-form line per declared repo with the iron-proxy secret
+	// placeholder as userinfo. Empty ⇒ no credentials file emitted.
+	// See internal/render/gitcredentials.go's RenderGitCredentials.
+	GitCredentials string
+	// GitConfig is the pre-rendered body of /home/devm/.gitconfig — fixed
+	// content that enables credential.helper=store + useHttpPath=true.
+	// Emitted independently of GitCredentials so a caller that clears
+	// credentials but keeps the config for the user's own credential
+	// helper still gets the store helper wired up.
+	GitConfig string
+
+	// MacTimezone is the Mac's IANA zone name (e.g. "America/Chicago").
+	// When non-empty, the bundle-stage script runs `timedatectl
+	// set-timezone <MacTimezone>` so user-visible timestamps in the
+	// guest match the Mac. Empty means "leave the guest at its baked
+	// UTC default" — the Mac-side resolver couldn't determine a zone.
+	MacTimezone string
+}
+
+// hasOpenWork reports whether the open egress window is needed this boot.
+func (in ProvisionScriptInput) hasOpenWork() bool {
+	return in.FirstBoot || in.StartupWrapperBody != "" || in.InstallTemplates ||
+		len(in.PackageAdds)+len(in.PackageRemoves) > 0
+}
+
+// defaultStepTimeoutSeconds is the fallback for ProvisionScriptInput.
+// StepTimeoutSeconds when unset. The composed script is streamed over a
+// single `tart exec`, so a command that hangs blocks the whole exec — not
+// just its own step — which would hang `devm shell` indefinitely. Matches
+// the old per-step provisioner's DEVM_INSTALL_STEP_TIMEOUT_S default.
+const defaultStepTimeoutSeconds = 600
+
+// serviceHealthPollSeconds bounds how long the composed script waits for
+// each declared service to reach a healthy state before aborting. Matches
+// the old per-step provisioner's enableStartServices poll budget.
+const serviceHealthPollSeconds = 10
+
+// RenderProvisionBundleScript composes the bundle-extract prerequisites that
+// must be in place before mutagen sync can run: the in-progress marker
+// WRITE, extraction of the devm bundle tar (piped in on stdin) to /opt/devm,
+// running its install.sh (CA install, PATH symlinks, mutagen-agent, systemd
+// units, ssh material), and the unconditional guest-nft flush. It is
+// delivered as `bash -c '<this>'` with the bundle tar on stdin, run while
+// softnet is OPEN — before mutagen sync setup and before
+// RenderProvisionUserScript. Always executed, every boot: install.sh is
+// idempotent (cmp -s guards), and the nft flush must clear the base image's
+// policy-drop lock regardless of whether this boot has any user-phase work.
+// `set -eo pipefail` makes any failing command abort the script immediately.
+//
+// The in-progress marker it writes is cleaned up by
+// RenderProvisionEnforcedScript, not here: a crash anywhere between this
+// script and the enforced script (host sleep, daemon restart, killed exec)
+// must leave the marker set, so the next `devm shell` sees a dirty VM and
+// tears it down rather than resuming onto an unknown intermediate state —
+// this is what closes the crash-hole where services could otherwise come up
+// under open egress.
+func RenderProvisionBundleScript(in ProvisionScriptInput) []byte {
+	var b strings.Builder
+	p := func(f string, a ...any) { fmt.Fprintf(&b, f+"\n", a...) }
+
+	p("#!/bin/bash")
+	p("set -eo pipefail")
+	// (1) in-progress marker FIRST. /run is tmpfs and /run/devm doesn't
+	// exist yet; the script runs as the unprivileged devm user, so both
+	// the directory and the marker need sudo.
+	p("sudo mkdir -p /run/devm")
+	p("sudo touch %s", inProgressMarker)
+	p("echo ::devm:stage:bundle::")
+	// (2) extract the bundle (tar on stdin) and run the extractor for CA/symlinks
+	p("sudo mkdir -p /opt/devm")
+	p("sudo tar -xC /opt/devm")    // consumes stdin
+	p("sudo /opt/devm/install.sh") // CA install + PATH symlink + mutagen-agent
+
+	// The base image bakes a policy-drop nftables lock (image/builder.go's
+	// nftables-locked.conf) into every fresh clone. softnet is the egress
+	// boundary now, not this guest ruleset, and a leftover policy-drop
+	// would drop softnet's own egress too — flushed unconditionally, every
+	// boot, regardless of whether this boot has a user-phase work window.
+	p("sudo nft flush ruleset")
+
+	// Match guest timezone to the Mac so timestamps in shells, logs,
+	// and running services (databases, browsers) read the same as the
+	// Mac. Idempotent: timedatectl no-ops when already set. Empty
+	// MacTimezone means the CLI couldn't resolve the Mac's zone —
+	// leave the guest at its baked UTC default rather than fail.
+	if in.MacTimezone != "" {
+		p("sudo timedatectl set-timezone %s", shellSingleQuoted(in.MacTimezone))
+	}
+
+	return []byte(b.String())
+}
+
+// RenderProvisionUserScript composes the user-declared-work half of
+// provisioning: packages, install:, the docker feature, template
+// installation, and startup:. It is delivered as `bash -c '<this>'` with NO
+// stdin — RenderProvisionBundleScript already extracted /opt/devm and ran
+// install.sh — run while softnet is still OPEN, after mutagen sync has
+// hydrated the workspace and before the ENFORCED flip. Stages are marked
+// with `::devm:stage:<name>::` on stdout; the daemon parses them to drive
+// the spinner AND to classify a failure by the stage it reached. `set -eo
+// pipefail` makes any failing command abort the script immediately.
+func RenderProvisionUserScript(in ProvisionScriptInput) []byte {
+	var b strings.Builder
+	p := func(f string, a ...any) { fmt.Fprintf(&b, f+"\n", a...) }
+	stepTimeout := in.StepTimeoutSeconds
+	if stepTimeout <= 0 {
+		stepTimeout = defaultStepTimeoutSeconds
+	}
+
+	p("#!/bin/bash")
+	p("set -eo pipefail")
+	p("%s", AptRetryHelper())
+
+	if in.hasOpenWork() {
+		p("echo ::devm:stage:open::")
+		if in.FirstBoot {
+			// apt indexes are refreshed once here, up front — filestash-deps
+			// below and the packages stage (if any) both need fresh indexes,
+			// and a cold guest has never run `apt-get update`.
+			p("apt_run update -y")
+
+			// Filestash's unit was installed+enabled but left unstarted by
+			// install.sh (stage:bundle runs before softnet opens egress, so
+			// apt couldn't reach deb.debian.org there). Now that the open
+			// window is up, install its ffmpeg shared-lib deps and start it.
+			// restart (not start) covers the retry path where filestash
+			// somehow got left running from a half-provisioned prior boot.
+			// Warm-boot bundle refreshes don't come through here: install.sh
+			// does the try-restart in stage:bundle, before FirstBoot is false.
+			p("echo ::devm:stage:filestash-deps::")
+			p("apt_run install -y --no-install-recommends libavformat61 libavcodec61 libavfilter10 libavutil59")
+			p("sudo systemctl restart filestash.service")
+
+			if len(in.Packages) > 0 {
+				p("echo ::devm:stage:packages::")
+				quoted := make([]string, len(in.Packages))
+				for i, pkg := range in.Packages {
+					quoted[i] = shellSingleQuoted(pkg)
+				}
+				p("apt_run install -y %s", strings.Join(quoted, " "))
+			}
+			if in.InstallWrapperBody != "" {
+				p("echo ::devm:stage:install::")
+				p("timeout %d %s bash -eo pipefail -c %s", stepTimeout, guestWrapper, shellSingleQuoted(in.InstallWrapperBody))
+			}
+			if in.Docker {
+				p("echo ::devm:stage:docker::")
+				// The docker install script (engine + runc-shim registration
+				// via daemon.json + socket drop-in). The shim binaries are
+				// bundle artifacts already installed by /opt/devm/install.sh.
+				p("%s", docker.InstallScript())
+				// dockerd joins the gate: disabled at boot, wanted by devm.target
+				p("sudo systemctl disable docker.service")
+				p("sudo mkdir -p /etc/systemd/system/devm.target.wants")
+				p("sudo ln -sf /lib/systemd/system/docker.service /etc/systemd/system/devm.target.wants/docker.service")
+			}
+		}
+		if !in.FirstBoot && len(in.PackageAdds)+len(in.PackageRemoves) > 0 {
+			p("echo ::devm:stage:packages::")
+			p("%s", AptConvergeScript(in.PackageAdds, in.PackageRemoves))
+		}
+		if in.InstallTemplates {
+			p("echo ::devm:stage:templates::")
+			// Runs THROUGH with-devm-env for auto-cd + terminfo setup. The
+			// dispatcher loops over /opt/devm/templates/*.sh (each idempotent),
+			// so re-running on a warm boot is safe.
+			p("%s bash %s", guestWrapper, guestDispatcher)
+		}
+		if in.StartupWrapperBody != "" {
+			p("echo ::devm:stage:startup::")
+			// One timeout budget for the whole body, run as a single bash
+			// process — env exports / cd from an earlier line stay visible
+			// to a later one.
+			p("timeout %d %s bash -eo pipefail -c %s", stepTimeout, guestWrapper, shellSingleQuoted(in.StartupWrapperBody))
+		}
+	}
+
+	return []byte(b.String())
+}
+
+// RenderProvisionEnforcedScript composes the ENFORCED-egress half of
+// provisioning, run immediately after RenderProvisionUserScript succeeds
+// and softnet has been flipped to ENFORCED. It is delivered as `bash -c
+// '<this>'` with NO stdin — /opt/devm was already extracted by
+// RenderProvisionBundleScript. It starts and health-polls user services,
+// then activates devm.target, and finally clears the in-progress marker
+// RenderProvisionBundleScript wrote — the LAST line, so the marker's
+// presence remains a genuine "provisioning not yet fully complete" signal
+// across the whole three-exec run, not just this half.
+func RenderProvisionEnforcedScript(in ProvisionScriptInput) []byte {
+	var b strings.Builder
+	p := func(f string, a ...any) { fmt.Fprintf(&b, f+"\n", a...) }
+
+	p("#!/bin/bash")
+	p("set -eo pipefail")
+
+	// (3) enforce: stage boundary marking the classifier's teardown/
+	// debuggable-VM split (stagesAfterInstall in provision.Provisioner) —
+	// a failure at or before this point is the daemon's own enforcement
+	// being broken, not the user's service.
+	p("echo ::devm:stage:enforce::")
+
+	// (4) services phase: start + health-poll services BEFORE granting
+	// access. A failure from here on leaves a provisioned VM whose
+	// user-declared service is what's broken, so the classifier keeps
+	// the VM for in-place debugging.
+	p("echo ::devm:stage:services::")
+	// Services are WantedBy=devm.target (disabled at boot), but we start them
+	// EXPLICITLY here and poll — so a broken service aborts (exit 1) BEFORE
+	// ssh/the target come up. Preserves "broken service is loud, no access".
+	p("sudo systemctl daemon-reload")
+	p("sudo systemctl unmask ssh")
+	for _, svc := range in.Services {
+		p("sudo systemctl enable %s.service", svc)
+		p("sudo systemctl start %s.service", svc)
+	}
+	// Bounded health poll, not a single is-failed snapshot: a Type=simple
+	// service that dies a beat after `start` returns would slip past a
+	// one-shot check and let devm.target activate with a dead service.
+	// One-shot-aware: a Type=oneshot unit without RemainAfterExit settles
+	// at ActiveState=inactive/Result=success once its ExecStart exits 0 —
+	// that's a pass, not a hang, so it's checked alongside is-active.
+	for _, svc := range in.Services {
+		p("svc_deadline=$((SECONDS+%d))", serviceHealthPollSeconds)
+		p("while :; do")
+		p("  if systemctl is-failed --quiet %s.service; then echo 'service %s failed' >&2; exit 1; fi", svc, svc)
+		p("  systemctl is-active --quiet %s.service && break", svc)
+		p("  [ \"$(systemctl show -p Result --value %s.service)\" = success ] && "+
+			"[ \"$(systemctl show -p ActiveState --value %s.service)\" = inactive ] && break", svc, svc)
+		p("  if [ \"$SECONDS\" -ge \"$svc_deadline\" ]; then echo 'service %s did not become healthy within %ds' >&2; exit 1; fi", svc, serviceHealthPollSeconds)
+		p("  sleep 0.5")
+		p("done")
+	}
+
+	// install.sh only installs the cron units at boot and never enables
+	// them, so this is the one place they start, and only after enforcement
+	// and healthy services, so no cron job fires during the open window.
+	for _, fn := range in.CronTimers {
+		p("sudo systemctl start %s", CronTimerUnit(fn))
+	}
+
+	// (5) first-boot completion marker — its presence flips the next boot off
+	// the first-boot path. Written only after every step above succeeded
+	// (set -eo pipefail), so it is a genuine "provisioning completed" signal.
+	if in.FirstBoot {
+		p("sudo mkdir -p /var/lib/devm")
+		p("sudo touch %s", provisionedMark)
+	}
+
+	// (6) LAST functional line: activate the target — ssh + dnsmasq +
+	// dockerd come up (services already healthy), enforced. Access is granted
+	// ONLY after services are confirmed up.
+	p("sudo systemctl start devm.target")
+
+	// Guest git credentials: emit .git-credentials (secrets placeholders,
+	// substituted by iron-proxy on the wire) and .gitconfig (store helper
+	// + path-scoped matching). Heredoc-fed to install(1) so owner/mode
+	// are set atomically and shell quoting is a non-issue.
+	if in.GitCredentials != "" {
+		p("install -o devm -g devm -m 0600 /dev/stdin /home/devm/.git-credentials <<'DEVM_GIT_CREDS_EOF'")
+		// Body — literal, exactly as rendered.
+		p("%s", strings.TrimRight(in.GitCredentials, "\n"))
+		p("DEVM_GIT_CREDS_EOF")
+	}
+	if in.GitConfig != "" {
+		p("install -o devm -g devm -m 0644 /dev/stdin /home/devm/.gitconfig <<'DEVM_GITCONFIG_EOF'")
+		p("%s", strings.TrimRight(in.GitConfig, "\n"))
+		p("DEVM_GITCONFIG_EOF")
+	}
+
+	// (7) cleanup marker on success — clears the marker RenderProvisionBundleScript
+	// wrote, closing out the three-exec provisioning run.
+	p("sudo rm -f %s", inProgressMarker)
+
+	return []byte(b.String())
+}

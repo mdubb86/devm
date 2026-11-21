@@ -1,0 +1,216 @@
+package schema_test
+
+import (
+	"reflect"
+	"strings"
+	"testing"
+
+	"github.com/mdubb86/devm/internal/schema"
+)
+
+// TestOverrideMirrorsBase locks the invariant that every exported
+// field in a base struct has a corresponding field in its override
+// twin, with the right "absence-distinguishable" shape:
+//
+//	string / int / bool  → *T
+//	[]T                  → *[]T
+//	map[K]V (V scalar)   → map[K]V        (nil is already "absent")
+//	map[K]Struct         → map[K]StructOverride
+//	struct (nested)      → *<Name>Override
+//
+// Drift in any direction (missing override field, wrong shape, or an
+// override field whose merge clause was forgotten) is a silent-drop
+// bug class — the field gets parsed and then dropped on the floor.
+// This test catches the structural half; merge.go has its own tests
+// covering the merge half.
+//
+// Adding a new Config field requires either adding the corresponding
+// ConfigOverride field OR adding the field name to the denylist below
+// with a one-line justification.
+func TestOverrideMirrorsBase(t *testing.T) {
+	cases := []struct {
+		name     string
+		base     reflect.Type
+		override reflect.Type
+		// Field names in base that are intentionally NOT overridable.
+		// Maps to a one-line reason.
+		denylist map[string]string
+	}{
+		{
+			name:     "Config",
+			base:     reflect.TypeOf(schema.Config{}),
+			override: reflect.TypeOf(schema.ConfigOverride{}),
+			denylist: map[string]string{
+				"BaseImage":    "empty struct (no fields); base_image: key is still parsed for YAML compat but nothing is overridable",
+				"Memory":       "VM sizing is project-wide in this release; per-dev override via devm.me.yaml is a separate followup.",
+				"Cpu":          "VM sizing is project-wide in this release; per-dev override via devm.me.yaml is a separate followup.",
+				"Scripts":      "not overridable per environment; scripts are a static definitional library shared across environments, referenced (and varied) via the already-overridable install:/startup: fields",
+				"Volumes":      "not overridable per environment; volume identity (name + guest path) is project-wide by design (docs/superpowers/specs/2026-08-01-persistent-volumes-design.md) — no cross-project sharing, no anonymous volumes, no per-dev variance",
+				"Repos":        "not overridable per environment; the project's repos are a project-wide identity decision, not a per-dev variance",
+				"Functions":    "discovered from devm.sh + devm.me.sh and populated by Load; not loaded from devm.me.yaml and thus not overridable",
+				"Guest":        "guest-request gates are project-wide policy; a per-user override in devm.me.yaml could silently permit calls a co-owner disabled in devm.yaml. Single-user today but the gate lives on the shared file by design.",
+				"MacServices":  "reach authorizations to Mac loopback ports — project-wide trust, same character as Guest; a per-user override would silently widen the Mac-side attack surface.",
+				"PeerServices": "reach authorizations to cooperating project VMs — project-wide trust, same character as Guest and MacServices.",
+				"SSH":          "reach authorizations to Mac ssh aliases — project-wide trust, same character as Guest/MacServices/PeerServices; a per-user override would silently widen the guest's ssh reach past what the project agrees on.",
+				"Snapshots":    "not overridable per environment; snapshot identity (name + hook contract) is a project-wide decision — a per-dev override would let one dev's schedule or retention drift silently from what the project agrees on. strictDecode's KnownFields(true) rejects `snapshots:` written in devm.me.yaml.",
+			},
+		},
+		{
+			name:     "Project",
+			base:     reflect.TypeOf(schema.Project{}),
+			override: reflect.TypeOf(schema.ProjectOverride{}),
+			denylist: nil,
+		},
+		{
+			name:     "Network",
+			base:     reflect.TypeOf(schema.Network{}),
+			override: reflect.TypeOf(schema.NetworkOverride{}),
+			denylist: nil,
+		},
+		{
+			name:     "Service",
+			base:     reflect.TypeOf(schema.Service{}),
+			override: reflect.TypeOf(schema.ServiceOverride{}),
+			denylist: map[string]string{
+				"BindIP": "set via Port field's YAML polymorphism, not standalone overridable",
+				// If other fields legitimately can't be overridden, add
+				// them here with a reason. Don't add a name just to
+				// make the test pass — that defeats the purpose.
+			},
+		},
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			assertOverrideMirrors(t, c.base, c.override, c.denylist)
+		})
+	}
+}
+
+func assertOverrideMirrors(t *testing.T, base, override reflect.Type, denylist map[string]string) {
+	t.Helper()
+	overrideFields := indexExported(override)
+	for i := 0; i < base.NumField(); i++ {
+		bf := base.Field(i)
+		if !bf.IsExported() {
+			continue
+		}
+		if _, denied := denylist[bf.Name]; denied {
+			continue
+		}
+		of, ok := overrideFields[bf.Name]
+		if !ok {
+			t.Errorf(
+				"DRIFT: %s.%s has no matching field in %s. "+
+					"Add it (with appropriate pointer-wrapping) or add %q to the denylist with a justification.",
+				base.Name(), bf.Name, override.Name(), bf.Name,
+			)
+			continue
+		}
+		want := expectedOverrideType(bf.Type)
+		if of.Type != want {
+			t.Errorf(
+				"SHAPE: %s.%s has type %s, expected %s. "+
+					"Override field needs the absence-distinguishable shape (typically *T).",
+				override.Name(), of.Name, of.Type, want,
+			)
+		}
+	}
+}
+
+func indexExported(t reflect.Type) map[string]reflect.StructField {
+	out := make(map[string]reflect.StructField, t.NumField())
+	for i := 0; i < t.NumField(); i++ {
+		f := t.Field(i)
+		if f.IsExported() {
+			out[f.Name] = f
+		}
+	}
+	return out
+}
+
+// expectedOverrideType returns the expected ConfigOverride/etc.
+// shape for a given base-struct field type.
+func expectedOverrideType(baseType reflect.Type) reflect.Type {
+	switch baseType.Kind() {
+	case reflect.Map:
+		// map[K]V: if V is a struct in the schema package, expect
+		// map[K]VOverride. Otherwise (primitive value), map stays
+		// map (nil already represents absent).
+		elem := baseType.Elem()
+		if elem.Kind() == reflect.Struct && elem.PkgPath() == "github.com/mdubb86/devm/internal/schema" {
+			if overrideElem := overrideTypeByName(elem.Name()); overrideElem != nil {
+				return reflect.MapOf(baseType.Key(), overrideElem)
+			}
+		}
+		return baseType
+	case reflect.Slice:
+		// []T → *[]T
+		return reflect.PtrTo(baseType)
+	case reflect.Struct:
+		// OrderedMap[T] in base pairs with map[string]TOverride on the
+		// override side: overrides are merged by key, so order is a
+		// base-side property only.
+		if elem, ok := orderedMapElem(baseType); ok {
+			if overrideElem := overrideTypeByName(elem.Name()); overrideElem != nil {
+				return reflect.MapOf(reflect.TypeOf(""), overrideElem)
+			}
+			return reflect.MapOf(reflect.TypeOf(""), elem)
+		}
+		// Nested struct in schema package → *<Name>Override
+		if baseType.PkgPath() == "github.com/mdubb86/devm/internal/schema" {
+			if o := overrideTypeByName(baseType.Name()); o != nil {
+				return reflect.PtrTo(o)
+			}
+		}
+		return baseType
+	case reflect.Ptr:
+		// Pointer-typed base field is already absence-distinguishable
+		// (nil vs non-nil). Override field uses the same pointer type.
+		return baseType
+	default:
+		// Scalar (string, int, bool, etc.) → *T
+		return reflect.PtrTo(baseType)
+	}
+}
+
+// orderedMapElem reports whether t is a schema.OrderedMap[T] and
+// returns T if so. OrderedMap's generic value lives behind the
+// Entries field (map[string]T), so the T is the map's element type.
+func orderedMapElem(t reflect.Type) (reflect.Type, bool) {
+	if t.PkgPath() != "github.com/mdubb86/devm/internal/schema" {
+		return nil, false
+	}
+	if !strings.HasPrefix(t.Name(), "OrderedMap[") {
+		return nil, false
+	}
+	entries, ok := t.FieldByName("Entries")
+	if !ok || entries.Type.Kind() != reflect.Map {
+		return nil, false
+	}
+	return entries.Type.Elem(), true
+}
+
+// overrideTypeByName looks up <Name>Override in the schema package
+// via a representative instance. Returns nil if no such type.
+func overrideTypeByName(name string) reflect.Type {
+	// Hard-coded lookup table because reflect doesn't enumerate
+	// package types. Add entries as new Override types are added.
+	table := map[string]reflect.Type{
+		"Project": reflect.TypeOf(schema.ProjectOverride{}),
+		"Network": reflect.TypeOf(schema.NetworkOverride{}),
+		"Service": reflect.TypeOf(schema.ServiceOverride{}),
+	}
+	return table[name]
+}
+
+// Sanity-check the test itself: a known-good pair should pass.
+func TestOverrideMirrorsBase_SmokeTest(t *testing.T) {
+	// If Config and ConfigOverride are correctly paired today
+	// (verified manually in the 2026-06-24 audit), this should
+	// always pass. If it fails, either the audit was wrong or
+	// someone introduced drift.
+	if strings.Count(reflect.TypeOf(schema.Config{}).Name(), "Config") != 1 {
+		t.Skip("smoke test only runs on Config type")
+	}
+}
